@@ -22,9 +22,16 @@ export const sheetsService = {
       if (!response.ok) throw new Error(text);
       
       try {
-        return JSON.parse(text);
-      } catch (e) {
-        throw new Error(`Invalid JSON response: ${text.substring(0, 100)}...`);
+        const data = JSON.parse(text);
+        if (data && typeof data === 'object' && 'error' in data) {
+          throw new Error(data.error);
+        }
+        if (!Array.isArray(data)) {
+          throw new Error('Expected an array from the server');
+        }
+        return data;
+      } catch (e: any) {
+        throw new Error(e.message || `Invalid JSON response: ${text.substring(0, 100)}...`);
       }
     } catch (error) {
       console.error(`Fetch error for ${sheetName}:`, error);

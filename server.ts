@@ -2,7 +2,6 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { createServer as createViteServer } from 'vite';
 import { google } from 'googleapis';
 import { JWT } from 'google-auth-library';
 import cors from 'cors';
@@ -357,8 +356,8 @@ app.post('/api/sheets/:sheetName', authenticateToken, async (req, res) => {
   }
 
   try {
-    // Inject UserId
-    if (sheetName !== 'Users') {
+    // Inject UserId only if not provided and not a User record
+    if (sheetName !== 'Users' && !data.UserId) {
       data.UserId = user.id;
     }
 
@@ -396,10 +395,10 @@ app.post('/api/sheets/:sheetName/batch', authenticateToken, async (req, res) => 
   }
 
   try {
-    // Inject UserId
+    // Inject UserId only if not provided and not a User record
     if (sheetName !== 'Users') {
       dataArray.forEach((d: any) => {
-        d.UserId = user.id;
+        if (!d.UserId) d.UserId = user.id;
       });
     }
 
@@ -699,15 +698,10 @@ app.post('/api/sheets/:sheetName/batch-delete', authenticateToken, async (req, r
 });
 
 async function startServer() {
-  try {
-    await initializeSpreadsheet();
-  } catch (error) {
-    console.error('Failed to initialize spreadsheet on startup:', error);
-    console.warn('Server will continue to start, but Google Sheets integration may fail.');
-  }
-
+  console.log(`Starting server in ${process.env.NODE_ENV || 'development'} mode...`);
   if (process.env.NODE_ENV !== 'production') {
     console.log('Running in DEVELOPMENT mode with Vite middleware');
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
@@ -737,6 +731,11 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
+    
+    // Initialize spreadsheet in the background after server starts
+    initializeSpreadsheet().catch(error => {
+      console.error('Failed to initialize spreadsheet:', error);
+    });
   });
 }
 

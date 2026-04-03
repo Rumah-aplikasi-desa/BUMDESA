@@ -254,8 +254,13 @@ export const DataUmumForm: React.FC<{ onUpdate?: () => void }> = ({ onUpdate }) 
         NamaPetugasAkuntansi: formData.namaPetugasAkuntansi,
         NikPetugasAkuntansi: formData.nikPetugasAkuntansi,
         LogoUrl: formData.logoUrl || '',
-        SignatureUrl: formData.signatureUrl || ''
+        SignatureUrl: formData.signatureUrl || '',
+        UserId: targetId
       };
+
+      console.log('Saving DataUmum payload size:', JSON.stringify(mappedData).length);
+      if (mappedData.LogoUrl) console.log('Logo length:', mappedData.LogoUrl.length);
+      if (mappedData.SignatureUrl) console.log('Signature length:', mappedData.SignatureUrl.length);
 
       // Check if data exists for this targetId
       const existing = await sheetsService.get('DataUmum');
@@ -269,9 +274,9 @@ export const DataUmumForm: React.FC<{ onUpdate?: () => void }> = ({ onUpdate }) 
       alert('Data Umum berhasil disimpan!');
       if (onUpdate) onUpdate();
       fetchData(); // Refresh local data
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error saving DataUmum:', error);
-      alert('Gagal menyimpan data.');
+      alert(`Gagal menyimpan data: ${error.message || 'Terjadi kesalahan tidak dikenal'}`);
     } finally {
       setIsSaving(false);
     }
