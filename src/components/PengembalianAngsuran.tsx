@@ -1,0 +1,688 @@
+import React, { useState, useMemo, useEffect } from 'react';
+import { CreditCard, Calculator, Sparkles, Loader2, Check, Plus, X, ArrowRight, Search, DollarSign, Calendar, FileText, Building, Info } from 'lucide-react';
+import { Reference, Account, Transaction } from '../types';
+import { formatCurrency, cn } from '../lib/utils';
+import { parseTransactionWithAI } from '../services/geminiService';
+import { TRANSACTION_CATEGORIES, CASH_FLOW_CATEGORIES } from '../constants';
+import { sheetsService } from '../services/sheetsService';
+import { motion, AnimatePresence } from 'motion/react';
+
+interface PengembalianAngsuranProps {
+  references: Reference[];
+  accounts: Account[];
+  transactions: Transaction[];
+  onRefresh: () => void;
+}
+
+const UNIT_USAHA_OPTIONS = [
+  'Kantor Pusat',
+  'Unit Usaha Perdagangan',
+  'Unit Usaha Jasa',
+  'Unit Usaha Simpan Pinjam',
+  'Unit Usaha Lainnya'
+];
+
+export const PengembalianAngsuran: React.FC<PengembalianAngsuranProps> = ({ references, accounts, transactions, onRefresh }) => {
+  const [isFormVisible, setIsFormVisible] = useState(false);
+  const [isAiLoading, setIsAiLoading] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [isCashFlowModalOpen, setIsCashFlowModalOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [editingId, setEditingId] = useState<string | null>(null);
+  
+  const [formData, setFormData] = useState({
+    nasabah: '',
+    unitUsaha: 'Kantor Pusat',
+    category: 'Piutang',
+    cashFlowCategory: '',
+    cashFlowSubCategory: '',
+    cashFlowItem: '',
+    evidenceNo: `BKM-${Date.now().toString().slice(-6)}`,
+    description: '',
+    value: 0,
+    angsuranPokok: 0,
+    bunga: 0,
+    debitAccountId: '',
+    creditAccountId: '',
+    date: new Date().toISOString().split('T')[0]
+  });
+
+  const nasabahList = useMemo(() => 
+    references.filter(r => ['PiutangSPP', 'PiutangUsaha', 'PiutangPegawai', 'PiutangLainnya'].includes(r.type)), 
+    [references]
+  );
+
+  // Find original loan and calculate remaining balance
+  const loanInfo = useMemo(() => {
+    if (!formData.nasabah) return null;
+
+    // Find the original loan transaction for this nasabah
+    const originalLoan = transactions.find(t => {
+      if (!t.details) return false;
+      try {
+        const details = typeof t.details === 'string' ? JSON.parse(t.details) : t.details;
+        return details.nasabah === formData.nasabah && (t.type === 'Piutang' || t.description.toLowerCase().includes('pinjam'));
+      } catch (e) {
+        return false;
+      }
+    });
+
+    if (!originalLoan) return null;
+
+    const details = typeof originalLoan.details === 'string' ? JSON.parse(originalLoan.details) : originalLoan.details;
+    
+    // Calculate total paid so far
+    const payments = transactions.filter(t => {
+      return t.description.toLowerCase().includes(`angsuran ${formData.nasabah.toLowerCase()}`) || 
+             t.description.toLowerCase().includes(`pengembalian ${formData.nasabah.toLowerCase()}`);
+    });
+
+    const totalPaid = payments.reduce((sum, p) => sum + p.value, 0);
+    const remainingPokok = details.alokasiPinjaman - totalPaid;
+    
+    // For simplicity, we assume interest is paid separately or calculated based on remaining
+    // In this context, we'll just show the monthly targets from the original loan
+    return {
+      originalLoan,
+      details,
+      remainingPokok: Math.max(0, remainingPokok),
+      angsuranPokok: details.angsuranPokok || 0,
+      bungaPerBulan: details.bungaPerBulan || 0,
+      totalAlokasi: details.alokasiPinjaman || 0
+    };
+  }, [formData.nasabah, transactions]);
+
+  const handleAiParse = async () => {
+    if (!aiPrompt) {
+      alert('Mohon masukkan perintah AI');
+      return;
+    }
+    setIsAiLoading(true);
+    try {
+      const parsed = await parseTransactionWithAI(aiPrompt, accounts);
+      if (parsed) {
+        const debitAcc = accounts.find(a => a.code === parsed.debitAccountCode);
+        const creditAcc = accounts.find(a => a.code === parsed.creditAccountCode);
+
+        setFormData(prev => ({
+          ...prev,
+          description: parsed.description,
+          value: parsed.value,
+          category: parsed.type || 'Piutang',
+          debitAccountId: debitAcc?.id || '',
+          creditAccountId: creditAcc?.id || '',
+          cashFlowCategory: parsed.cashFlowCategory || '',
+          cashFlowSubCategory: parsed.cashFlowSubCategory || '',
+          cashFlowItem: parsed.cashFlowItem || '',
+          date: parsed.date || prev.date,
+          evidenceNo: parsed.evidenceNo || prev.evidenceNo
+        }));
+        
+        if (parsed.cashFlowItem) {
+          setIsCashFlowModalOpen(false);
+        } else {
+          setIsCashFlowModalOpen(true);
+        }
+      } else {
+        alert('Maaf, AI gagal memproses perintah Anda.');
+      }
+    } catch (error) {
+      console.error('AI Error:', error);
+      alert('Terjadi kesalahan saat menghubungi AI.');
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (!formData.debitAccountId || !formData.creditAccountId) {
+      alert('Mohon pilih akun debit dan kredit');
+      return;
+    }
+
+    if (!formData.cashFlowItem) {
+      alert('Mohon pilih klasifikasi arus kas');
+      setIsCashFlowModalOpen(true);
+      return;
+    }
+
+    try {
+      const debitAcc = accounts.find(a => a.id === formData.debitAccountId);
+      const creditAcc = accounts.find(a => a.id === formData.creditAccountId);
+
+      const journalEntries = [];
+      if (debitAcc) {
+        journalEntries.push({
+          accountId: debitAcc.id,
+          accountCode: debitAcc.code,
+          accountName: debitAcc.name,
+          debit: formData.value || 0,
+          credit: 0
+        });
+      }
+      if (creditAcc) {
+        journalEntries.push({
+          accountId: creditAcc.id,
+          accountCode: creditAcc.code,
+          accountName: creditAcc.name,
+          debit: 0,
+          credit: formData.value || 0
+        });
+      }
+
+      const user = JSON.parse(sessionStorage.getItem('bumdesa_user') || '{}');
+
+      const finalData = {
+        Id: editingId || crypto.randomUUID(),
+        Date: formData.date,
+        EvidenceNo: formData.evidenceNo,
+        Description: formData.description,
+        Amount: formData.value,
+        Type: formData.category,
+        CashFlowCategory: formData.cashFlowCategory,
+        CashFlowSubCategory: formData.cashFlowSubCategory,
+        CashFlowItem: formData.cashFlowItem,
+        Details: JSON.stringify({
+          nasabah: formData.nasabah,
+          unitUsaha: formData.unitUsaha,
+          angsuranPokok: formData.angsuranPokok,
+          bunga: formData.bunga,
+          isAngsuran: true,
+          loanInfo: loanInfo ? {
+            originalLoanId: loanInfo.originalLoan.id,
+            remainingPokok: loanInfo.remainingPokok
+          } : null
+        }),
+        JournalEntries: JSON.stringify(journalEntries),
+        UserId: user.id
+      };
+
+      if (editingId) {
+        await sheetsService.update('Transactions', editingId, finalData);
+      } else {
+        await sheetsService.create('Transactions', finalData);
+      }
+      
+      setFormData({
+        nasabah: '',
+        unitUsaha: 'Kantor Pusat',
+        category: 'Piutang',
+        cashFlowCategory: '',
+        cashFlowSubCategory: '',
+        cashFlowItem: '',
+        evidenceNo: `BKM-${Date.now().toString().slice(-6)}`,
+        description: '',
+        value: 0,
+        angsuranPokok: 0,
+        bunga: 0,
+        debitAccountId: '',
+        creditAccountId: '',
+        date: new Date().toISOString().split('T')[0]
+      });
+      
+      setEditingId(null);
+      setIsFormVisible(false);
+      onRefresh();
+      alert(editingId ? 'Data berhasil diperbarui!' : 'Data Pengembalian/Angsuran berhasil disimpan!');
+    } catch (error) {
+      console.error('Error saving transaction:', error);
+      alert('Gagal menyimpan data. Silakan coba lagi.');
+    }
+  };
+
+  const handleEdit = (t: Transaction) => {
+    const details = typeof t.details === 'string' ? JSON.parse(t.details) : t.details;
+    const journalEntries = typeof t.journalEntries === 'string' ? JSON.parse(t.journalEntries) : t.journalEntries;
+    
+    const debitEntry = journalEntries.find((e: any) => e.debit > 0);
+    const creditEntry = journalEntries.find((e: any) => e.credit > 0);
+
+    setFormData({
+      nasabah: details.nasabah || '',
+      unitUsaha: details.unitUsaha || 'Kantor Pusat',
+      category: t.type,
+      cashFlowCategory: t.cashFlowCategory || '',
+      cashFlowSubCategory: t.cashFlowSubCategory || '',
+      cashFlowItem: t.cashFlowItem || '',
+      evidenceNo: t.evidenceNo,
+      description: t.description,
+      value: t.value,
+      angsuranPokok: details.angsuranPokok || 0,
+      bunga: details.bunga || 0,
+      debitAccountId: debitEntry?.accountId || '',
+      creditAccountId: creditEntry?.accountId || '',
+      date: t.date
+    });
+    setEditingId(t.id);
+    setIsFormVisible(true);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('Apakah Anda yakin ingin menghapus transaksi ini?')) return;
+    try {
+      await sheetsService.delete('Transactions', id);
+      onRefresh();
+      alert('Transaksi berhasil dihapus');
+    } catch (error) {
+      console.error('Error deleting transaction:', error);
+      alert('Gagal menghapus transaksi');
+    }
+  };
+
+  const filteredTransactions = transactions.filter(t => {
+    const details = t.details;
+    if (details?.isAngsuran) return true;
+    if (details?.isPenyaluran) return false;
+    
+    const desc = t.description.toLowerCase();
+    return desc.includes('angsuran') || desc.includes('pengembalian');
+  }).filter(t => 
+    t.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    t.evidenceNo.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  return (
+    <div className="space-y-6 md:space-y-8">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2 text-emerald-600 font-bold text-xs md:text-sm uppercase tracking-wider">
+            <CreditCard size={16} />
+            Pengembalian/Angsuran
+          </div>
+          <h1 className="text-2xl md:text-3xl font-bold text-slate-900 tracking-tight">Form Pengembalian/Angsuran</h1>
+        </div>
+        {!isFormVisible && (
+          <button 
+            onClick={() => setIsFormVisible(true)}
+            className="flex items-center justify-center gap-2 px-6 py-3 text-sm font-bold text-white bg-emerald-500 rounded-xl hover:bg-emerald-600 transition-all shadow-lg shadow-emerald-500/20 w-full md:w-auto"
+          >
+            <Plus size={18} />
+            Tambah Transaksi
+          </button>
+        )}
+      </div>
+
+      <AnimatePresence>
+        {isFormVisible && (
+          <motion.div 
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
+            className="space-y-6"
+          >
+            {/* AI Assistant Card */}
+            <div className="bg-gradient-to-br from-emerald-500 to-teal-600 p-6 md:p-8 rounded-3xl shadow-xl shadow-emerald-500/10 text-white relative overflow-hidden">
+              <div className="absolute top-[-10%] right-[-5%] w-64 h-64 bg-white/10 rounded-full blur-3xl" />
+              <div className="relative z-10 space-y-6">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-white/20 rounded-lg backdrop-blur-md">
+                    <Sparkles size={24} />
+                  </div>
+                  <h2 className="text-lg md:text-xl font-bold">Asisten AI Pengembalian</h2>
+                </div>
+                <div className="flex flex-col sm:flex-row gap-3">
+                  <input 
+                    type="text" 
+                    value={aiPrompt}
+                    onChange={(e) => setAiPrompt(e.target.value)}
+                    placeholder="Ketik perintah AI di sini..."
+                    className="flex-1 bg-white/10 border border-white/20 text-white placeholder:text-emerald-100/50 px-4 md:px-6 py-3 md:py-4 rounded-2xl focus:ring-2 focus:ring-white/30 outline-none transition-all backdrop-blur-md text-sm md:text-base"
+                  />
+                  <button 
+                    onClick={handleAiParse}
+                    disabled={isAiLoading}
+                    className="bg-white text-emerald-600 font-bold px-6 md:px-8 py-3 md:py-4 rounded-2xl hover:bg-emerald-50 transition-all flex items-center justify-center gap-2 disabled:opacity-70 text-sm md:text-base"
+                  >
+                    {isAiLoading ? <Loader2 className="animate-spin" size={20} /> : <Sparkles size={20} />}
+                    Proses AI
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <form onSubmit={handleSubmit} className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-slate-100 space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                    <Building size={16} className="text-slate-400" />
+                    Unit Usaha / Kantor Pusat
+                  </label>
+                  <select 
+                    required
+                    value={formData.unitUsaha}
+                    onChange={(e) => setFormData({...formData, unitUsaha: e.target.value})}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm"
+                  >
+                    {UNIT_USAHA_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                  </select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                    <Building size={16} className="text-slate-400" />
+                    Nama Nasabah
+                  </label>
+                  <select 
+                    required
+                    value={formData.nasabah}
+                    onChange={(e) => setFormData({...formData, nasabah: e.target.value})}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm"
+                  >
+                    <option value="">Pilih Nasabah</option>
+                    {nasabahList.map(r => <option key={r.id} value={r.name}>{r.name} ({r.type.replace('Piutang', 'Piutang ')})</option>)}
+                  </select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                    <Building size={16} className="text-slate-400" />
+                    Kategori Transaksi
+                  </label>
+                  <select 
+                    value={formData.category}
+                    onChange={(e) => setFormData({...formData, category: e.target.value})}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm"
+                  >
+                    {TRANSACTION_CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                  </select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                    <Calendar size={16} className="text-slate-400" />
+                    Tanggal
+                  </label>
+                  <input 
+                    type="date" 
+                    value={formData.date}
+                    onChange={(e) => setFormData({...formData, date: e.target.value})}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                    <FileText size={16} className="text-slate-400" />
+                    Nomor Bukti
+                  </label>
+                  <input 
+                    type="text" 
+                    value={formData.evidenceNo}
+                    onChange={(e) => setFormData({...formData, evidenceNo: e.target.value})}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                    <Sparkles size={16} className="text-emerald-400" />
+                    Arus Kas
+                  </label>
+                  <button 
+                    type="button"
+                    onClick={() => setIsCashFlowModalOpen(true)}
+                    className="w-full px-4 py-3 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-xl font-bold text-sm hover:bg-emerald-100 transition-all flex items-center justify-center gap-2"
+                  >
+                    {formData.cashFlowItem ? 'Ubah Arus Kas' : 'Pilih Arus Kas'}
+                    {formData.cashFlowItem && <Check size={16} />}
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                    <DollarSign size={16} className="text-slate-400" />
+                    Nilai Transaksi
+                  </label>
+                  <input 
+                    type="number" 
+                    value={formData.value}
+                    onChange={(e) => setFormData({...formData, value: Number(e.target.value)})}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm font-bold"
+                  />
+                </div>
+
+                <div className="space-y-2 md:col-span-2">
+                  <label className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                    <FileText size={16} className="text-slate-400" />
+                    Uraian Transaksi
+                  </label>
+                  <textarea 
+                    value={formData.description}
+                    onChange={(e) => setFormData({...formData, description: e.target.value})}
+                    rows={3}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-slate-700">Akun Debit</label>
+                  <select 
+                    value={formData.debitAccountId}
+                    onChange={(e) => setFormData({...formData, debitAccountId: e.target.value})}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm"
+                  >
+                    <option value="">Pilih Akun...</option>
+                    {accounts.filter(a => !a.code.endsWith('.00')).map(acc => <option key={acc.id} value={acc.id}>{acc.code} - {acc.name}</option>)}
+                  </select>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-slate-700">Akun Kredit</label>
+                  <select 
+                    value={formData.creditAccountId}
+                    onChange={(e) => setFormData({...formData, creditAccountId: e.target.value})}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm"
+                  >
+                    <option value="">Pilih Akun...</option>
+                    {accounts.filter(a => !a.code.endsWith('.00')).map(acc => <option key={acc.id} value={acc.id}>{acc.code} - {acc.name}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* Installment Info Cards */}
+              {loanInfo && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="bg-emerald-50 p-6 rounded-2xl border border-emerald-100 space-y-4">
+                    <div className="flex items-center gap-2 text-emerald-800 font-bold">
+                      <Info size={20} />
+                      Target Angsuran Bulanan
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-1">
+                        <div className="text-[10px] text-emerald-600 font-bold uppercase">Pokok</div>
+                        <div className="text-lg font-bold text-emerald-900">{formatCurrency(loanInfo.angsuranPokok)}</div>
+                      </div>
+                      <div className="space-y-1">
+                        <div className="text-[10px] text-emerald-600 font-bold uppercase">Bunga</div>
+                        <div className="text-lg font-bold text-emerald-900">{formatCurrency(loanInfo.bungaPerBulan)}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-amber-50 p-6 rounded-2xl border border-amber-100 space-y-4">
+                    <div className="flex items-center gap-2 text-amber-800 font-bold">
+                      <Calculator size={20} />
+                      Sisa Pinjaman
+                    </div>
+                    <div className="grid grid-cols-1 gap-4">
+                      <div className="space-y-1">
+                        <div className="text-[10px] text-amber-600 font-bold uppercase">Sisa Pokok</div>
+                        <div className="text-lg font-bold text-amber-900">{formatCurrency(loanInfo.remainingPokok)}</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex flex-col sm:flex-row gap-4">
+                <button 
+                  type="button"
+                  onClick={() => setIsFormVisible(false)}
+                  className="flex-1 py-4 text-sm font-bold text-slate-600 bg-slate-100 rounded-xl hover:bg-slate-200 transition-all"
+                >
+                  Batal
+                </button>
+                <button 
+                  type="submit"
+                  className="flex-1 py-4 text-sm font-bold text-white bg-emerald-500 rounded-xl hover:bg-emerald-600 transition-all shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2"
+                >
+                  Simpan Transaksi
+                  <ArrowRight size={18} />
+                </button>
+              </div>
+            </form>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Tabel Hasil Inputan */}
+      <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-slate-100">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+          <h3 className="text-xl font-bold text-slate-900">Hasil Inputan Pengembalian/Angsuran</h3>
+          <div className="relative w-full md:w-64">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+            <input 
+              type="text" 
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Cari transaksi..."
+              className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-emerald-500/20"
+            />
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left">
+            <thead>
+              <tr className="bg-slate-50">
+                <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase">No</th>
+                <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase">Tanggal</th>
+                <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase">Nasabah</th>
+                <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase">Uraian</th>
+                <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase text-right">Nilai</th>
+                <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase text-center">Aksi</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {filteredTransactions.length === 0 ? (
+                <tr>
+                  <td className="px-6 py-8 text-sm text-slate-500 text-center italic" colSpan={6}>Belum ada data transaksi angsuran.</td>
+                </tr>
+              ) : (
+                filteredTransactions.map((t, index) => (
+                  <tr key={t.id} className="hover:bg-slate-50/50 transition-colors">
+                    <td className="px-6 py-4 text-sm text-slate-600">{index + 1}</td>
+                    <td className="px-6 py-4 text-sm text-slate-600 whitespace-nowrap">{t.date}</td>
+                    <td className="px-6 py-4 text-sm text-slate-900 font-medium">
+                      {t.details?.nasabah || '-'}
+                    </td>
+                    <td className="px-6 py-4 text-sm text-slate-600 min-w-[200px]">{t.description}</td>
+                    <td className="px-6 py-4 text-sm text-slate-900 font-bold text-right">{formatCurrency(t.value)}</td>
+                    <td className="px-6 py-4 text-sm text-center">
+                      <div className="flex items-center justify-center gap-2">
+                        <button 
+                          onClick={() => handleEdit(t)}
+                          className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                          title="Edit"
+                        >
+                          <FileText size={16} />
+                        </button>
+                        <button 
+                          onClick={() => handleDelete(t.id)}
+                          className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                          title="Hapus"
+                        >
+                          <X size={16} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Cash Flow Modal */}
+      <AnimatePresence>
+        {isCashFlowModalOpen && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-md">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white w-full max-w-lg rounded-3xl shadow-2xl overflow-hidden"
+            >
+              <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+                <h3 className="text-xl font-bold text-slate-900 flex items-center gap-2">
+                  <Sparkles size={20} className="text-emerald-500" />
+                  Klasifikasi Arus Kas
+                </h3>
+                <button onClick={() => setIsCashFlowModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+                  <X size={24} />
+                </button>
+              </div>
+              <div className="p-8 space-y-6">
+                <div className="space-y-2">
+                  <label className="text-xs font-black text-slate-400 uppercase tracking-widest">Aktivitas Arus Kas</label>
+                  <select 
+                    value={formData.cashFlowCategory}
+                    onChange={(e) => setFormData({...formData, cashFlowCategory: e.target.value, cashFlowSubCategory: '', cashFlowItem: ''})}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all"
+                  >
+                    <option value="">Pilih Aktivitas...</option>
+                    {Object.keys(CASH_FLOW_CATEGORIES).map(cat => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {formData.cashFlowCategory && (
+                  <div className="space-y-2">
+                    <label className="text-xs font-black text-slate-400 uppercase tracking-widest">Jenis Arus Kas</label>
+                    <select 
+                      value={formData.cashFlowSubCategory}
+                      onChange={(e) => setFormData({...formData, cashFlowSubCategory: e.target.value, cashFlowItem: ''})}
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all"
+                    >
+                      <option value="">Pilih Jenis...</option>
+                      {Object.keys(CASH_FLOW_CATEGORIES[formData.cashFlowCategory]).map(sub => (
+                        <option key={sub} value={sub}>{sub}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {formData.cashFlowSubCategory && (
+                  <div className="space-y-2">
+                    <label className="text-xs font-black text-slate-400 uppercase tracking-widest">Item Arus Kas</label>
+                    <select 
+                      value={formData.cashFlowItem}
+                      onChange={(e) => setFormData({...formData, cashFlowItem: e.target.value})}
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all"
+                    >
+                      <option value="">Pilih Item...</option>
+                      {CASH_FLOW_CATEGORIES[formData.cashFlowCategory][formData.cashFlowSubCategory].map(item => (
+                        <option key={item} value={item}>{item}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                <button 
+                  onClick={() => setIsCashFlowModalOpen(false)}
+                  disabled={!formData.cashFlowItem}
+                  className="w-full py-4 bg-emerald-500 text-white rounded-xl font-bold hover:bg-emerald-600 transition-all shadow-lg shadow-emerald-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Konfirmasi Arus Kas
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+};

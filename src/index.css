@@ -1,0 +1,28 @@
+@import "tailwindcss";
+
+#report-table, #buku-bantu-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  border: none !important;
+}
+#report-table th, #report-table td, #buku-bantu-table th, #buku-bantu-table td {
+  border: 1px solid #000 !important;
+}
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .print-receipt, .print-receipt *,
+  #report-container, #report-container *,
+  #buku-bantu-container, #buku-bantu-container * {
+    visibility: visible;
+  }
+  .print-receipt, #report-container, #buku-bantu-container {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    box-shadow: none !important;
+  }
+}
