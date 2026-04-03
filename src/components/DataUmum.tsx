@@ -148,6 +148,7 @@ export const DataUmumForm: React.FC<{ onUpdate?: () => void }> = ({ onUpdate }) 
         let width = img.width;
         let height = img.height;
 
+        // Calculate new dimensions
         if (width > maxWidth) {
           height *= maxWidth / width;
           width = maxWidth;
@@ -157,13 +158,37 @@ export const DataUmumForm: React.FC<{ onUpdate?: () => void }> = ({ onUpdate }) 
           height = maxHeight;
         }
 
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(img, 0, 0, width, height);
+        const process = (w: number, h: number, quality: number): string => {
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            // Fill white background for JPEG
+            ctx.fillStyle = '#FFFFFF';
+            ctx.fillRect(0, 0, w, h);
+            ctx.drawImage(img, 0, 0, w, h);
+          }
+          return canvas.toDataURL('image/jpeg', quality);
+        };
+
+        let currentQuality = 0.7;
+        let currentWidth = width;
+        let currentHeight = height;
+        let result = process(currentWidth, currentHeight, currentQuality);
+
+        // If still too large for Google Sheets (50,000 chars), reduce quality and size
+        // We use 45000 as a safe buffer
+        while (result.length > 45000 && (currentQuality > 0.3 || currentWidth > 50)) {
+          if (currentQuality > 0.3) {
+            currentQuality -= 0.1;
+          } else {
+            currentWidth *= 0.8;
+            currentHeight *= 0.8;
+          }
+          result = process(currentWidth, currentHeight, currentQuality);
         }
-        resolve(canvas.toDataURL('image/png', 0.7)); // Use 0.7 quality to further reduce size
+
+        resolve(result);
       };
     });
   };

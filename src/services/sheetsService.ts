@@ -14,16 +14,21 @@ const getHeaders = () => {
 
 export const sheetsService = {
   async get(sheetName: string): Promise<SheetData[]> {
-    const response = await fetch(`${API_URL}/${sheetName}`, {
-      headers: getHeaders()
-    });
-    const text = await response.text();
-    if (!response.ok) throw new Error(text);
-    
     try {
-      return JSON.parse(text);
-    } catch (e) {
-      throw new Error(`Invalid JSON response: ${text.substring(0, 100)}...`);
+      const response = await fetch(`${API_URL}/${sheetName}`, {
+        headers: getHeaders()
+      });
+      const text = await response.text();
+      if (!response.ok) throw new Error(text);
+      
+      try {
+        return JSON.parse(text);
+      } catch (e) {
+        throw new Error(`Invalid JSON response: ${text.substring(0, 100)}...`);
+      }
+    } catch (error) {
+      console.error(`Fetch error for ${sheetName}:`, error);
+      throw error;
     }
   },
 

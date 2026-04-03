@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { google } from 'googleapis';
@@ -15,7 +16,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'bumdesa-secret-key-2026';
 
 app.use(cors());
@@ -698,9 +699,15 @@ app.post('/api/sheets/:sheetName/batch-delete', authenticateToken, async (req, r
 });
 
 async function startServer() {
-  await initializeSpreadsheet();
+  try {
+    await initializeSpreadsheet();
+  } catch (error) {
+    console.error('Failed to initialize spreadsheet on startup:', error);
+    console.warn('Server will continue to start, but Google Sheets integration may fail.');
+  }
 
   if (process.env.NODE_ENV !== 'production') {
+    console.log('Running in DEVELOPMENT mode with Vite middleware');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
@@ -708,9 +715,23 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
+    console.log(`Running in PRODUCTION mode. Serving static files from: ${distPath}`);
+    
+    if (!fs.existsSync(distPath)) {
+      console.error('ERROR: "dist" folder not found! Did you run "npm run build"?');
+    } else if (!fs.existsSync(path.join(distPath, 'index.html'))) {
+      console.error('ERROR: "dist/index.html" not found!');
+    }
+
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+      const indexPath = path.join(distPath, 'index.html');
+      res.sendFile(indexPath, (err) => {
+        if (err) {
+          console.error(`Error sending index.html: ${err.message}`);
+          res.status(500).send('Server Error: index.html not found. Please ensure "npm run build" was executed.');
+        }
+      });
     });
   }
 
