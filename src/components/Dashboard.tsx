@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useMemo } from 'react';
 import { 
   TrendingUp, 
   TrendingDown, 
@@ -40,7 +40,6 @@ import {
 } from 'recharts';
 import { formatCurrency, cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
-import { sheetsService } from '../services/sheetsService';
 import { Transaction, Account, DataUmum } from '../types';
 import { analyzeFinancialHealth } from '../services/geminiService';
 import ReactMarkdown from 'react-markdown';
@@ -79,19 +78,56 @@ const StatCard = ({ title, value, change, icon: Icon, color, description }: any)
 interface DashboardProps {
   userRole?: string;
   allDataUmum?: DataUmum[];
+  transactions?: Transaction[];
+  accounts?: Account[];
 }
 
-export const Dashboard: React.FC<DashboardProps> = ({ userRole = 'User', allDataUmum = [] }) => {
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [accounts, setAccounts] = useState<Account[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+export const Dashboard: React.FC<DashboardProps> = ({
+  userRole = 'User',
+  allDataUmum = [],
+  transactions = [],
+  accounts = [],
+}) => {
   const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [filterYear, setFilterYear] = useState(new Date().getFullYear().toString());
 
+  // Hierarchical filters for Owner
+  const [filterKabupaten, setFilterKabupaten] = useState('');
+  const [filterKecamatan, setFilterKecamatan] = useState('');
+  const [filterDesa, setFilterDesa] = useState('');
+  const [filterBumdes, setFilterBumdes] = useState('');
+
+  // Get unique values for hierarchical filters
+  const kabupatenList = useMemo(() => [...new Set(allDataUmum.map(d => d.kabupaten))].filter(Boolean).sort(), [allDataUmum]);
+  const kecamatanList = useMemo(() => [...new Set(allDataUmum.filter(d => !filterKabupaten || d.kabupaten === filterKabupaten).map(d => d.kecamatan))].filter(Boolean).sort(), [allDataUmum, filterKabupaten]);
+  const desaList = useMemo(() => [...new Set(allDataUmum.filter(d => (!filterKabupaten || d.kabupaten === filterKabupaten) && (!filterKecamatan || d.kecamatan === filterKecamatan)).map(d => d.desa))].filter(Boolean).sort(), [allDataUmum, filterKabupaten, filterKecamatan]);
+  const bumdesList = useMemo(() => allDataUmum.filter(d => 
+    (!filterKabupaten || d.kabupaten === filterKabupaten) && 
+    (!filterKecamatan || d.kecamatan === filterKecamatan) &&
+    (!filterDesa || d.desa === filterDesa)
+  ).sort((a, b) => a.namaBumdesa.localeCompare(b.namaBumdesa)), [allDataUmum, filterKabupaten, filterKecamatan, filterDesa]);
+
+  // Determine current active BUMDes UserId
+  const selectedBumdesUserId = useMemo(() => {
+    if (userRole !== 'Owner') return null;
+    return allDataUmum.find(d => d.namaBumdesa === filterBumdes)?.userId || null;
+  }, [userRole, filterBumdes, allDataUmum]);
+
   const filteredTransactions = useMemo(() => {
-    return transactions.filter(t => new Date(t.date).getFullYear().toString() === filterYear);
-  }, [transactions, filterYear]);
+    let data = transactions;
+    if (userRole === 'Owner' && selectedBumdesUserId) {
+      data = data.filter(t => t.userId === selectedBumdesUserId);
+    }
+    return data.filter(t => new Date(t.date).getFullYear().toString() === filterYear);
+  }, [transactions, filterYear, userRole, selectedBumdesUserId]);
+
+  const filteredAccounts = useMemo(() => {
+    if (userRole === 'Owner' && selectedBumdesUserId) {
+      return accounts.filter(a => a.createdBy === selectedBumdesUserId);
+    }
+    return accounts;
+  }, [accounts, userRole, selectedBumdesUserId]);
 
   const stats = useMemo(() => {
     const revenue = filteredTransactions
@@ -100,45 +136,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ userRole = 'User', allData
     const expense = filteredTransactions
       .filter(t => t.journalEntries?.some(e => e.accountCode.startsWith('5') || e.accountCode.startsWith('7')))
       .reduce((sum, t) => sum + t.value, 0);
-    const assets = accounts
+    const assets = filteredAccounts
       .filter(a => a.type === 'Asset')
       .reduce((sum, a) => sum + Number(a.balance || 0), 0);
     
     return { revenue, expense, profit: revenue - expense, assets };
-  }, [filteredTransactions, accounts]);
-
-  const fetchData = async () => {
-    try {
-      const [transData, accData] = await Promise.all([
-        sheetsService.get('Transactions'),
-        sheetsService.get('Accounts')
-      ]);
-
-      setTransactions(transData.map(t => ({
-        id: t.Id,
-        date: t.Date,
-        description: t.Description,
-        type: t.Type,
-        value: Number(t.Amount),
-        userId: t.UserId,
-        journalEntries: t.JournalEntries ? JSON.parse(t.JournalEntries) : []
-      } as Transaction)));
-
-      setAccounts(accData.map(a => ({
-        id: a.Id,
-        code: a.Code,
-        name: a.Name,
-        type: a.Type,
-        normalBalance: a.NormalBalance,
-        balance: Number(a.Balance || 0),
-        createdBy: a.CreatedBy
-      } as Account)));
-    } catch (error) {
-      console.error('Error fetching dashboard data:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  }, [filteredTransactions, filteredAccounts]);
 
   const handleAiAnalysis = async () => {
     if (isAnalyzing) return;
@@ -147,7 +150,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ userRole = 'User', allData
     try {
       // Use filtered transactions
       const dataToAnalyze = filteredTransactions;
-      const accountsToAnalyze = accounts;
+      const accountsToAnalyze = filteredAccounts;
 
       if (dataToAnalyze.length === 0) {
         setAiAnalysis('Maaf, AI tidak dapat memberikan analisis saat ini. Pastikan data transaksi tersedia untuk tahun yang dipilih.');
@@ -160,29 +163,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ userRole = 'User', allData
       } else {
         setAiAnalysis('Maaf, AI tidak dapat memberikan analisis saat ini. Pastikan data transaksi tersedia atau API Key sudah dikonfigurasi.');
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('AI Analysis failed:', error);
-      setAiAnalysis('Terjadi kesalahan saat melakukan analisis AI. Silakan periksa koneksi internet atau kunci API Anda.');
+      setAiAnalysis(error?.message || 'Terjadi kesalahan saat melakukan analisis AI. Silakan periksa koneksi internet atau kunci API Anda.');
     } finally {
       setIsAnalyzing(false);
     }
   };
-
-  // Auto-trigger AI Analysis
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  // Stats Calculations based on all transactions for the current year (matching Laporan Laba Rugi)
-  // stats is already defined above
-
-
-  // Auto-trigger AI Analysis
-  useEffect(() => {
-    if (!isLoading && transactions.length > 0 && !aiAnalysis && !isAnalyzing) {
-      handleAiAnalysis();
-    }
-  }, [isLoading, transactions.length, aiAnalysis, isAnalyzing]);
 
   // Full Year Chart Data
   const chartData = useMemo(() => {
@@ -190,7 +177,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ userRole = 'User', allData
     const currentYear = parseInt(filterYear);
     
     return months.map((month, index) => {
-      const monthTransactions = transactions.filter(t => {
+      const monthTransactions = filteredTransactions.filter(t => {
         const d = new Date(t.date);
         return d.getMonth() === index && d.getFullYear() === currentYear;
       });
@@ -215,16 +202,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ userRole = 'User', allData
         laba: (revenue - expense) / 1000
       };
     });
-  }, [transactions, filterYear]);
+  }, [filteredTransactions, filterYear]);
 
   const pieData = useMemo(() => {
     return [
-      { name: 'Kas & Bank', value: accounts.filter(a => a.code.startsWith('1.1.01') || a.code.startsWith('1.1.02')).reduce((acc, a) => acc + (Number(a.balance) || 0), 0) || 0 },
-      { name: 'Piutang', value: accounts.filter(a => a.code.startsWith('1.1.03')).reduce((acc, a) => acc + (Number(a.balance) || 0), 0) || 0 },
-      { name: 'Persediaan', value: accounts.filter(a => a.code.startsWith('1.1.04')).reduce((acc, a) => acc + (Number(a.balance) || 0), 0) || 0 },
-      { name: 'Aset Tetap', value: accounts.filter(a => a.code.startsWith('1.3')).reduce((acc, a) => acc + (Number(a.balance) || 0), 0) || 0 },
+      { name: 'Kas & Bank', value: filteredAccounts.filter(a => a.code.startsWith('1.1.01') || a.code.startsWith('1.1.02')).reduce((acc, a) => acc + (Number(a.balance) || 0), 0) || 0 },
+      { name: 'Piutang', value: filteredAccounts.filter(a => a.code.startsWith('1.1.03')).reduce((acc, a) => acc + (Number(a.balance) || 0), 0) || 0 },
+      { name: 'Persediaan', value: filteredAccounts.filter(a => a.code.startsWith('1.1.04')).reduce((acc, a) => acc + (Number(a.balance) || 0), 0) || 0 },
+      { name: 'Aset Tetap', value: filteredAccounts.filter(a => a.code.startsWith('1.3')).reduce((acc, a) => acc + (Number(a.balance) || 0), 0) || 0 },
     ].filter(d => d.value > 0);
-  }, [accounts]);
+  }, [filteredAccounts]);
 
   const exportAIPDF = async () => {
     const element = document.getElementById('ai-analysis-content');
@@ -282,19 +269,94 @@ export const Dashboard: React.FC<DashboardProps> = ({ userRole = 'User', allData
     document.body.removeChild(link);
   };
 
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <div className="flex flex-col items-center gap-4">
-          <Loader2 className="animate-spin text-emerald-500" size={48} />
-          <p className="text-slate-400 font-medium animate-pulse">Menyiapkan Dashboard...</p>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-6 md:space-y-8 pb-12">
+      {/* Owner Filters */}
+      {userRole === 'Owner' && (
+        <motion.div 
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100"
+        >
+          <div className="flex items-center gap-3 mb-6">
+            <div className="p-2 bg-sky-50 rounded-xl text-sky-600">
+              <Filter size={20} />
+            </div>
+            <h2 className="text-lg font-black text-slate-900">Filter Wilayah & BUMDesa</h2>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Kabupaten</label>
+              <div className="relative">
+                <select 
+                  value={filterKabupaten}
+                  onChange={(e) => {
+                    setFilterKabupaten(e.target.value);
+                    setFilterKecamatan('');
+                    setFilterDesa('');
+                    setFilterBumdes('');
+                  }}
+                  className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-sky-500/20 transition-all appearance-none"
+                >
+                  <option value="">Semua Kabupaten</option>
+                  {kabupatenList.map(k => <option key={k} value={k}>{k}</option>)}
+                </select>
+                <ChevronDown size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Kecamatan</label>
+              <div className="relative">
+                <select 
+                  value={filterKecamatan}
+                  onChange={(e) => {
+                    setFilterKecamatan(e.target.value);
+                    setFilterDesa('');
+                    setFilterBumdes('');
+                  }}
+                  className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-sky-500/20 transition-all appearance-none"
+                >
+                  <option value="">Semua Kecamatan</option>
+                  {kecamatanList.map(k => <option key={k} value={k}>{k}</option>)}
+                </select>
+                <ChevronDown size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Desa</label>
+              <div className="relative">
+                <select 
+                  value={filterDesa}
+                  onChange={(e) => {
+                    setFilterDesa(e.target.value);
+                    setFilterBumdes('');
+                  }}
+                  className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-sky-500/20 transition-all appearance-none"
+                >
+                  <option value="">Semua Desa</option>
+                  {desaList.map(d => <option key={d} value={d}>{d}</option>)}
+                </select>
+                <ChevronDown size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Nama BUMDesa</label>
+              <div className="relative">
+                <select 
+                  value={filterBumdes}
+                  onChange={(e) => setFilterBumdes(e.target.value)}
+                  className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-sky-500/20 transition-all appearance-none"
+                >
+                  <option value="">Pilih BUMDesa</option>
+                  {bumdesList.map(d => <option key={d.namaBumdesa} value={d.namaBumdesa}>{d.namaBumdesa}</option>)}
+                </select>
+                <ChevronDown size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              </div>
+            </div>
+          </div>
+        </motion.div>
+      )}
+
       {/* Header & AI Button */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
         <div className="flex flex-col gap-2">
@@ -441,7 +503,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ userRole = 'User', allData
               </div>
               <div>
                 <h2 className="text-xl font-black text-slate-900">Performa Tahunan</h2>
-                <p className="text-xs text-slate-400 font-medium uppercase tracking-widest mt-1">Pendapatan vs Beban ({new Date().getFullYear()})</p>
+                <p className="text-xs text-slate-400 font-medium uppercase tracking-widest mt-1">Pendapatan vs Beban ({filterYear})</p>
               </div>
             </div>
           </div>
@@ -587,7 +649,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ userRole = 'User', allData
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {transactions.slice(0, 8).map((t) => (
+              {filteredTransactions.slice(0, 8).map((t) => (
                 <tr key={t.id} className="hover:bg-slate-50/50 transition-colors group">
                   <td className="px-8 py-5 text-sm font-medium text-slate-500">{t.date}</td>
                   <td className="px-8 py-5">
@@ -608,7 +670,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ userRole = 'User', allData
                   <td className="px-8 py-5 text-sm font-black text-slate-900 text-right">{formatCurrency(t.value)}</td>
                 </tr>
               ))}
-              {transactions.length === 0 && (
+              {filteredTransactions.length === 0 && (
                 <tr>
                   <td colSpan={4} className="px-8 py-20 text-center">
                     <div className="flex flex-col items-center gap-3">

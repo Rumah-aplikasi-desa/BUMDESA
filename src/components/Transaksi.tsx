@@ -161,9 +161,9 @@ export const Transaksi: React.FC<TransaksiProps> = ({ accounts, references }) =>
         console.error('AI Parse failed: parseTransactionWithAI returned null');
         alert('Maaf, AI gagal memproses perintah Anda. Pastikan deskripsi transaksi cukup jelas.');
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('AI Error in handleAiParse:', error);
-      alert('Terjadi kesalahan saat menghubungi AI.');
+      alert(error?.message || 'Terjadi kesalahan saat menghubungi AI.');
     } finally {
       setIsAiLoading(false);
     }

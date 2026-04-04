@@ -20,9 +20,12 @@ import {
   TrendingUp,
   PieChart,
   Calculator,
-  Clock
+  Clock,
+  Phone,
+  MessageSquare
 } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { motion, AnimatePresence } from 'motion/react';
 
 interface SidebarItemProps {
   icon: React.ElementType;
@@ -91,6 +94,7 @@ export const Layout: React.FC<LayoutProps> = ({
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [isContactModalOpen, setIsContactModalOpen] = useState(false);
   const [openMenus, setOpenMenus] = useState<Record<string, boolean>>({
     referensi: false,
     laporan: false,
@@ -275,11 +279,69 @@ export const Layout: React.FC<LayoutProps> = ({
           {isSidebarOpen && (
             <div className="mt-4 text-center text-sm font-medium text-sky-100 leading-relaxed">
               <p>dibuat oleh; Firy</p>
-              <p>no WA 082359422510</p>
+              <button 
+                onClick={() => setIsContactModalOpen(true)}
+                className="hover:text-white hover:underline transition-colors font-bold"
+              >
+                no WA 082359422510
+              </button>
             </div>
           )}
         </div>
       </aside>
+
+      {/* Contact Modal */}
+      <AnimatePresence>
+        {isContactModalOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsContactModalOpen(false)}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="bg-white rounded-[2rem] shadow-2xl w-full max-w-sm overflow-hidden relative z-10"
+            >
+              <div className="bg-sky-500 p-8 text-center text-white">
+                <div className="w-20 h-20 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <Phone size={40} />
+                </div>
+                <h3 className="text-xl font-black">Hubungi Admin</h3>
+                <p className="text-sky-100 text-sm mt-1">Firy - 082359422510</p>
+              </div>
+              <div className="p-6 space-y-3">
+                <a 
+                  href="tel:082359422510"
+                  className="flex items-center justify-center gap-3 w-full py-4 bg-slate-900 text-white rounded-2xl font-bold hover:bg-slate-800 transition-colors shadow-lg shadow-slate-200"
+                >
+                  <Phone size={20} />
+                  Telepon Sekarang
+                </a>
+                <a 
+                  href="https://wa.me/6282359422510"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center justify-center gap-3 w-full py-4 bg-emerald-500 text-white rounded-2xl font-bold hover:bg-emerald-600 transition-colors shadow-lg shadow-emerald-100"
+                >
+                  <MessageSquare size={20} />
+                  WhatsApp
+                </a>
+                <button 
+                  onClick={() => setIsContactModalOpen(false)}
+                  className="w-full py-3 text-slate-400 text-sm font-bold hover:text-slate-600 transition-colors"
+                >
+                  Tutup
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col overflow-hidden w-full">

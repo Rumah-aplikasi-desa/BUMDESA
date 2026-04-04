@@ -127,9 +127,9 @@ export const PengembalianAngsuran: React.FC<PengembalianAngsuranProps> = ({ refe
         console.error('AI Parse failed: parseTransactionWithAI returned null');
         alert('Maaf, AI gagal memproses perintah Anda.');
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('AI Error in handleAiParse:', error);
-      alert('Terjadi kesalahan saat menghubungi AI.');
+      alert(error?.message || 'Terjadi kesalahan saat menghubungi AI.');
     } finally {
       setIsAiLoading(false);
     }

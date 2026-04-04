@@ -30,7 +30,7 @@ export default function App() {
   // App State
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [references, setReferences] = useState<Reference[]>([]);
-  const [transactions, setTransactions] = useState<any[]>([]);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [allDataUmum, setAllDataUmum] = useState<DataUmum[]>([]);
   const [dataUmum, setDataUmum] = useState<DataUmum>({
     kabupaten: '',
@@ -126,6 +126,7 @@ export default function App() {
             name: a.Name,
             type: a.Type,
             normalBalance: a.NormalBalance,
+            balance: Number(a.Balance || 0),
             createdBy: a.CreatedBy
           })));
       } else {
@@ -160,12 +161,29 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (isLoggedIn) {
-      refreshData();
-      // Poll every 60 seconds for "real-time" feel
-      const interval = setInterval(refreshData, 60000);
-      return () => clearInterval(interval);
-    }
+    if (!isLoggedIn) return;
+
+    refreshData();
+
+    // Poll while the tab is visible to reduce unnecessary server load.
+    const interval = setInterval(() => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        refreshData();
+      }
+    }, 120000);
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        refreshData();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, [isLoggedIn]);
 
   const handleLogout = () => {
@@ -202,7 +220,7 @@ export default function App() {
   }
 
   const renderContent = () => {
-    if (activeTab === 'dashboard') return <Dashboard userRole={user?.role || 'User'} allDataUmum={allDataUmum} />;
+    if (activeTab === 'dashboard') return <Dashboard userRole={user?.role || 'User'} allDataUmum={allDataUmum} transactions={transactions} accounts={accounts} />;
     if (activeTab === 'dataUmum') return <DataUmumForm onUpdate={refreshData} />;
     if (activeTab === 'coa') return <COA currentUser={user} />;
     if (activeTab.startsWith('ref-')) return <Referensi activeSubTab={activeTab} onRefresh={refreshData} />;
@@ -229,4 +247,3 @@ export default function App() {
     </ErrorBoundary>
   );
 }
-

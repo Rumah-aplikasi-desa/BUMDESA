@@ -5,7 +5,7 @@ export interface SheetData {
 const API_URL = '/api/sheets';
 
 const getHeaders = () => {
-  const token = sessionStorage.getItem('bumdesa_token') || localStorage.getItem('token');
+  const token = sessionStorage.getItem('bumdesa_token') || localStorage.getItem('bumdesa_token');
   return {
     'Content-Type': 'application/json',
     ...(token ? { 'Authorization': `Bearer ${token}` } : {})

@@ -407,19 +407,6 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
                 {formatCurrency(accounts.filter(a => a.code === '1.1.01.01').reduce((sum, a) => sum + getAccountBalance(a.code, filterYear, filterMonth), 0))}
               </td>
             </tr>
-            {accounts
-              .filter(a => a.name.toLowerCase().includes('bank') && !a.code.endsWith('.00'))
-              .map(bank => {
-                const balance = getAccountBalance(bank.code, filterYear, filterMonth);
-                if (balance === 0) return null;
-                return (
-                  <tr key={bank.id} className="bg-slate-50 font-medium italic">
-                    <td colSpan={5} className="px-2 py-2 text-[10px] text-right uppercase">{bank.name}</td>
-                    <td className="px-2 py-2 text-[10px] text-right">{formatCurrency(balance)}</td>
-                  </tr>
-                );
-              })
-            }
             <tr className="bg-slate-100 font-bold border-t border-slate-300">
               <td colSpan={5} className="px-2 py-2 text-[10px] text-right uppercase">Saldo Di Bank</td>
               <td className="px-2 py-2 text-[10px] text-right">

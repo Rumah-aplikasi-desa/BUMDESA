@@ -5,19 +5,23 @@ import { fileURLToPath } from 'url';
 import { google } from 'googleapis';
 import { JWT } from 'google-auth-library';
 import { BigQuery } from '@google-cloud/bigquery';
+import { GoogleGenAI } from '@google/genai';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { TRANSACTION_CATEGORIES, CASH_FLOW_CATEGORIES } from './src/constants';
 
+dotenv.config({ path: '.env.local' });
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 3000; // Force port 3000 as per infrastructure requirements
+const PORT = Number(process.env.PORT || 3000);
 const JWT_SECRET = process.env.JWT_SECRET || 'bumdesa-secret-key-2026';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
@@ -55,7 +59,8 @@ async function getBigQueryClient() {
   try {
     const SERVICE_ACCOUNT_KEY = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
     if (!SERVICE_ACCOUNT_KEY) return null;
-    const key = JSON.parse(SERVICE_ACCOUNT_KEY);
+    const cleanKey = SERVICE_ACCOUNT_KEY.trim().replace(/^['"]|['"]$/g, '');
+    const key = JSON.parse(cleanKey);
     
     const bigquery = new BigQuery({
       projectId: key.project_id,
@@ -68,6 +73,120 @@ async function getBigQueryClient() {
     return bigquery;
   } catch (error) {
     console.error('Error initializing BigQuery client:', error);
+    return null;
+  }
+}
+
+function getGeminiApiKey() {
+  const key = process.env.GEMINI_API_KEY || process.env.API_KEY || process.env.VITE_GEMINI_API_KEY;
+
+  if (!key || key === 'undefined' || key.trim() === '' || key.length < 10) {
+    return null;
+  }
+
+  return key;
+}
+
+function getGeminiClient() {
+  const apiKey = getGeminiApiKey();
+  if (!apiKey) return null;
+
+  return new GoogleGenAI({ apiKey });
+}
+
+async function parseTransactionWithAI(prompt: string, accounts: any[]) {
+  const ai = getGeminiClient();
+  if (!ai) return null;
+
+  const accountList = accounts.map(a => `${a.code}: ${a.name}`).join('\n');
+  const categories = TRANSACTION_CATEGORIES.join(', ');
+  const cashFlowStructure = JSON.stringify(CASH_FLOW_CATEGORIES, null, 2);
+
+  const fullPrompt = `Parse the following accounting transaction description into a structured format.
+Input: "${prompt}"
+Current date: ${new Date().toISOString().split('T')[0]}
+
+Available Accounts (COA):
+${accountList}
+
+Available Transaction Categories:
+${categories}
+
+Available Cash Flow Structure:
+${cashFlowStructure}
+
+Accounting Rules for Simpan Pinjam (Savings and Loans):
+1. Pemberian Pinjaman (Giving a loan):
+   - Debit: Akun Piutang (e.g., 1.1.03.xx Piutang SPP)
+   - Credit: Akun Kas atau Bank (e.g., 1.1.01.xx Kas atau 1.1.02.xx Bank)
+2. Penerimaan Angsuran (Receiving repayment):
+   - Debit: Akun Kas atau Bank (e.g., 1.1.01.xx Kas atau 1.1.02.xx Bank)
+   - Credit: Akun Piutang (e.g., 1.1.03.xx Piutang SPP)
+3. Penerimaan Bunga (Receiving interest):
+   - Debit: Akun Kas atau Bank
+   - Credit: Akun Pendapatan Bunga (e.g., 4.1.01.xx Pendapatan Bunga SPP)
+
+Based on the input:
+1. Select the most appropriate Debit and Credit accounts from the list above.
+2. Select the most appropriate Transaction Category (type).
+3. Select the most appropriate Cash Flow Category, Sub-Category, and Item from the structure above.
+
+Return ONLY valid JSON format with fields: date (YYYY-MM-DD), evidenceNo, description, value (number), debitAccountCode, creditAccountCode, type, cashFlowCategory, cashFlowSubCategory, cashFlowItem, amount (number), duration (number), interest (number), loanType (string). Do not include markdown formatting like \`\`\`json.`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: fullPrompt,
+    });
+
+    const responseText = response.text;
+    if (!responseText) return null;
+
+    const cleanedText = responseText.replace(/```json\n?|```/g, '').trim();
+    return JSON.parse(cleanedText);
+  } catch (error) {
+    console.error('AI Parsing Error:', error);
+    return null;
+  }
+}
+
+async function analyzeFinancialHealthWithAI(transactions: any[], accounts: any[]) {
+  const ai = getGeminiClient();
+  if (!ai) return null;
+
+  const prompt = `
+Anda adalah Konsultan Keuangan Senior spesialis BUM Desa (Badan Usaha Milik Desa).
+Tugas Anda adalah memberikan Analisis Kesehatan Keuangan yang komprehensif, mendalam, dan profesional berdasarkan data yang diberikan.
+
+STRUKTUR LAPORAN YANG WAJIB DIIKUTI:
+1. RINGKASAN EKSEKUTIF: Gambaran umum kondisi keuangan saat ini.
+2. HASIL PENILAIAN TINGKAT KESEHATAN (Skor 1-100): Berikan penilaian berdasarkan rasio likuiditas, solvabilitas, dan rentabilitas.
+3. ANALISIS LABA-RUGI: Analisis mendalam tentang efisiensi operasional dan profitabilitas.
+4. ANALISIS PENDAPATAN VS BEBAN: Identifikasi tren dan anomali dalam pengeluaran.
+5. ANALISIS NERACA: Evaluasi struktur aset, kewajiban, dan ekuitas.
+6. REKOMENDASI STRATEGIS: Berikan minimal 3 langkah konkret untuk meningkatkan performa keuangan.
+7. KRITIK MEMBANGUN: Sampaikan kelemahan yang ditemukan dalam pencatatan atau manajemen keuangan.
+
+PENTING:
+- Jika ada saran kesalahan, peringatan, atau wawasan yang sangat penting dan mendesak, Anda WAJIB mengapit teks tersebut dengan tag [MERAH] dan [/MERAH]. Contoh: [MERAH]Segera kurangi beban operasional yang membengkak![/MERAH]
+- Gunakan format Markdown standar untuk heading (##), list (-), dan bold (**).
+- Jangan biarkan bagian manapun kosong. Jika data tidak cukup, berikan asumsi atau saran umum.
+- Gunakan bahasa Indonesia yang formal, tajam, namun tetap memberikan motivasi bagi pengelola BUM Desa.
+
+DATA UNTUK DIANALISIS:
+- Daftar Transaksi (100 terakhir): ${JSON.stringify(transactions.slice(0, 100))}
+- Daftar Akun & Saldo: ${JSON.stringify(accounts)}
+`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: prompt,
+    });
+
+    return response.text || null;
+  } catch (error) {
+    console.error('AI Analysis Error:', error);
     return null;
   }
 }
@@ -101,7 +220,7 @@ async function withRetry(fn: () => Promise<any>, retries = 5, delay = 2000): Pro
 
 // Simple in-memory cache
 const cache: Record<string, { data: any, timestamp: number }> = {};
-const CACHE_TTL = 10000; // 10 seconds
+const CACHE_TTL = 60000; // 60 seconds
 
 function getFromCache(key: string) {
   const cached = cache[key];
@@ -123,10 +242,64 @@ function clearCache(sheetName?: string) {
         delete cache[key];
       }
     });
+    if (sheetName === 'Users') {
+      delete cache.owner_ids;
+    }
   } else {
     // Clear all cache
     Object.keys(cache).forEach(key => delete cache[key]);
   }
+}
+
+async function getOwnerIds(client: any) {
+  const cacheKey = 'owner_ids';
+  const cachedOwnerIds = getFromCache(cacheKey);
+  if (cachedOwnerIds) {
+    return cachedOwnerIds;
+  }
+
+  const usersResponse = await withRetry(() => client.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: 'Users!A2:Z',
+  }));
+
+  const userRows = usersResponse.data.values || [];
+  const userHeaders = SHEETS_CONFIG.Users;
+  const ownerIds = userRows
+    .map((row: any) => {
+      const user: any = {};
+      userHeaders.forEach((header, index) => {
+        user[header] = row[index] || '';
+      });
+      return user;
+    })
+    .filter((user: any) => user.Role === 'Owner')
+    .map((user: any) => user.Id);
+
+  setInCache(cacheKey, ownerIds);
+  return ownerIds;
+}
+
+async function filterSheetDataForUser(sheetName: string, data: any[], user: any, client: any) {
+  if (sheetName === 'Accounts' && user.role !== 'Owner') {
+    try {
+      const ownerIds = await getOwnerIds(client);
+      return data.filter((item: any) => item.UserId === user.id || ownerIds.includes(item.UserId));
+    } catch (err) {
+      console.error('Error fetching owners for COA filtering:', err);
+      return data.filter((item: any) => item.UserId === user.id);
+    }
+  }
+
+  if (user.role !== 'Owner' && user.role !== 'Admin') {
+    if (sheetName === 'Users') {
+      return data.filter((item: any) => item.Id === user.id);
+    }
+
+    return data.filter((item: any) => item.UserId === user.id);
+  }
+
+  return data;
 }
 
 async function initializeSpreadsheet() {
@@ -202,15 +375,16 @@ async function initializeSpreadsheet() {
 
 // Health Check
 app.get('/api/health', (req, res) => {
+  const geminiKey = getGeminiApiKey();
   res.json({ 
     status: 'ok', 
     timestamp: new Date().toISOString(),
     env: {
-      hasGeminiKey: !!process.env.GEMINI_API_KEY,
+      hasGeminiKey: !!geminiKey,
       hasSheetsKey: !!process.env.GOOGLE_SERVICE_ACCOUNT_KEY,
       hasSpreadsheetId: !!process.env.GOOGLE_SPREADSHEET_ID,
-      geminiKeyLength: process.env.GEMINI_API_KEY?.length || 0,
-      geminiKeyStart: process.env.GEMINI_API_KEY ? `${process.env.GEMINI_API_KEY.substring(0, 4)}...` : 'none'
+      geminiKeyLength: geminiKey?.length || 0,
+      geminiKeyStart: geminiKey ? `${geminiKey.substring(0, 4)}...` : 'none'
     }
   });
 });
@@ -365,6 +539,44 @@ const authenticateToken = (req: express.Request, res: express.Response, next: ex
   });
 };
 
+app.post('/api/ai/parse-transaction', authenticateToken, async (req, res) => {
+  const { prompt, accounts } = req.body;
+
+  if (!prompt || !Array.isArray(accounts)) {
+    return res.status(400).json({ error: 'Prompt and accounts are required' });
+  }
+
+  if (!getGeminiApiKey()) {
+    return res.status(500).json({ error: 'GEMINI_API_KEY belum dikonfigurasi di server.' });
+  }
+
+  const parsed = await parseTransactionWithAI(prompt, accounts);
+  if (!parsed) {
+    return res.status(502).json({ error: 'AI gagal memproses transaksi.' });
+  }
+
+  res.json(parsed);
+});
+
+app.post('/api/ai/analyze-financial-health', authenticateToken, async (req, res) => {
+  const { transactions, accounts } = req.body;
+
+  if (!Array.isArray(transactions) || !Array.isArray(accounts)) {
+    return res.status(400).json({ error: 'Transactions and accounts are required' });
+  }
+
+  if (!getGeminiApiKey()) {
+    return res.status(500).json({ error: 'GEMINI_API_KEY belum dikonfigurasi di server.' });
+  }
+
+  const analysis = await analyzeFinancialHealthWithAI(transactions, accounts);
+  if (!analysis) {
+    return res.status(502).json({ error: 'AI gagal membuat analisis keuangan.' });
+  }
+
+  res.json({ analysis });
+});
+
 // API Routes
 app.get('/api/sheets/batch', authenticateToken, async (req, res) => {
   const user = (req as any).user;
@@ -404,34 +616,7 @@ app.get('/api/sheets/batch', authenticateToken, async (req, res) => {
         return obj;
       });
 
-      // Filter data (simplified for batch)
-      let filteredData = data;
-      if (sheetName === 'Accounts' && user.role !== 'Owner') {
-        // We'll skip complex filtering for batch for now or implement it
-        // For simplicity, let's just use the same logic as the single route
-        try {
-          const usersResponse = await withRetry(() => client.spreadsheets.values.get({
-            spreadsheetId: SPREADSHEET_ID,
-            range: 'Users!A2:Z',
-          }));
-          const userRows = usersResponse.data.values || [];
-          const userHeaders = SHEETS_CONFIG.Users;
-          const ownerIds = userRows
-            .map((row: any) => {
-              const u: any = {};
-              userHeaders.forEach((h, i) => u[h] = row[i] || '');
-              return u;
-            })
-            .filter((u: any) => u.Role === 'Owner')
-            .map((u: any) => u.Id);
-
-          filteredData = data.filter((d: any) => d.UserId === user.id || ownerIds.includes(d.UserId));
-        } catch (err) {
-          filteredData = data.filter((d: any) => d.UserId === user.id);
-        }
-      } else if (user.role !== 'Owner' && user.role !== 'Admin') {
-        filteredData = data.filter((d: any) => d.UserId === user.id);
-      }
+      const filteredData = await filterSheetDataForUser(sheetName, data, user, client);
 
       setInCache(cacheKey, filteredData);
       results[sheetName] = filteredData;
@@ -480,38 +665,7 @@ app.get('/api/sheets/:sheetName', authenticateToken, async (req, res) => {
       return obj;
     });
 
-    // Filter data
-    let filteredData = data;
-    if (sheetName === 'Accounts' && user.role !== 'Owner') {
-      // For Accounts, everyone except Owner sees their own + Owner's accounts
-      try {
-        const usersResponse = await withRetry(() => client.spreadsheets.values.get({
-          spreadsheetId: SPREADSHEET_ID,
-          range: 'Users!A2:Z',
-        }));
-        const userRows = usersResponse.data.values || [];
-        const userHeaders = SHEETS_CONFIG.Users;
-        const ownerIds = userRows
-          .map((row: any) => {
-            const u: any = {};
-            userHeaders.forEach((h, i) => u[h] = row[i] || '');
-            return u;
-          })
-          .filter((u: any) => u.Role === 'Owner')
-          .map((u: any) => u.Id);
-
-        filteredData = data.filter((d: any) => d.UserId === user.id || ownerIds.includes(d.UserId));
-      } catch (err) {
-        console.error('Error fetching owners for COA filtering:', err);
-        filteredData = data.filter((d: any) => d.UserId === user.id);
-      }
-    } else if (user.role !== 'Owner' && user.role !== 'Admin') {
-      if (sheetName === 'Users') {
-        filteredData = data.filter((d: any) => d.Id === user.id);
-      } else {
-        filteredData = data.filter((d: any) => d.UserId === user.id);
-      }
-    }
+    const filteredData = await filterSheetDataForUser(sheetName, data, user, client);
 
     setInCache(cacheKey, filteredData);
     res.json(filteredData);

@@ -82,7 +82,7 @@ export const COA: React.FC<COAProps> = ({ currentUser }) => {
     fetchAccounts();
   }, []);
 
-  const filteredAccounts = accounts.sort((a, b) => a.code.localeCompare(b.code)).filter(acc => 
+  const filteredAccounts = [...accounts].sort((a, b) => a.code.localeCompare(b.code)).filter(acc => 
     acc.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
     acc.code.includes(searchTerm)
   );
