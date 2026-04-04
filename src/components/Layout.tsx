@@ -273,7 +273,7 @@ export const Layout: React.FC<LayoutProps> = ({
             {isSidebarOpen && <span>Logout</span>}
           </button>
           {isSidebarOpen && (
-            <div className="mt-4 text-center text-[10px] font-bold text-white leading-relaxed opacity-80">
+            <div className="mt-4 text-center text-sm font-medium text-sky-100 leading-relaxed">
               <p>dibuat oleh; Firy</p>
               <p>no WA 082359422510</p>
             </div>

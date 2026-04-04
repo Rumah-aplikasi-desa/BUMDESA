@@ -64,6 +64,8 @@ export interface TransactionDetail {
   isPenyaluran?: boolean;
   nasabah?: string;
   bunga?: number;
+  kepada?: string;
+  alamat?: string;
 }
 
 export interface JournalEntry {

@@ -14,9 +14,9 @@ import {
   FileCode
 } from 'lucide-react';
 import { cn, formatCurrency, formatDate } from '../lib/utils';
-import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
+import * as XLSX from 'xlsx';
 import { motion } from 'motion/react';
 import { Account, Reference, Transaction } from '../types';
 import { PrintModal } from './PrintModal';
@@ -32,9 +32,9 @@ interface LaporanProps {
 }
 
 export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, accounts, references, userRole, allDataUmum = [] }) => {
-  const [filterMonth, setFilterMonth] = useState('03');
-  const [filterYear, setFilterYear] = useState('2026');
-  const [filterUnitUsaha, setFilterUnitUsaha] = useState('');
+  const [filterMonth, setFilterMonth] = useState((new Date().getMonth() + 1).toString().padStart(2, '0'));
+  const [filterYear, setFilterYear] = useState(new Date().getFullYear().toString());
+  const [filterUnitUsaha, setFilterUnitUsaha] = useState('all');
   const [selectedAccount, setSelectedAccount] = useState('');
   const [filterCategory, setFilterCategory] = useState('');
   
@@ -68,6 +68,16 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
     ? transactions.filter(t => t.userId === bumdesUserId || !t.userId)
     : transactions;
 
+  const unitTransactions = (filterUnitUsaha === 'all' || !(type === 'lap-neraca' || type === 'lap-laba-rugi'))
+    ? bumdesTransactions
+    : bumdesTransactions.filter(t => {
+        if (filterUnitUsaha === 'SPP') {
+          const details = typeof t.details === 'string' ? JSON.parse(t.details || '{}') : (t.details || {});
+          return t.unitId === 'SPP' || details.isPenyaluran || details.isAngsuran;
+        }
+        return (t.unitId || '') === filterUnitUsaha;
+      });
+
   const bumdesReferences = bumdesUserId
     ? references.filter(r => r.userId === bumdesUserId || !r.userId)
     : references;
@@ -81,7 +91,7 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
     
     let balance = 0;
     
-    bumdesTransactions.forEach(t => {
+    unitTransactions.forEach(t => {
       const tDate = new Date(t.date);
       const tYear = tDate.getFullYear();
       const tMonth = tDate.getMonth() + 1;
@@ -112,13 +122,13 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
     let totalRevenue = 0;
     let totalExpense = 0;
     
-    bumdesTransactions.forEach(t => {
+    unitTransactions.forEach(t => {
       const tDate = new Date(t.date);
       if (tDate.getFullYear() === targetYear && (month === 'all' || (tDate.getMonth() + 1) <= targetMonth)) {
         t.journalEntries?.forEach(entry => {
-          if (entry.accountCode.startsWith('4')) { // Revenue
+          if (entry.accountCode.startsWith('4') || entry.accountCode.startsWith('7.1')) { // Revenue
             totalRevenue += (entry.credit || 0) - (entry.debit || 0);
-          } else if (entry.accountCode.startsWith('5')) { // Expense
+          } else if (entry.accountCode.startsWith('5') || entry.accountCode.startsWith('7.2') || entry.accountCode.startsWith('7.3')) { // Expense
             totalExpense += (entry.debit || 0) - (entry.credit || 0);
           }
         });
@@ -133,7 +143,7 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
     
     let balance = 0;
     
-    bumdesTransactions.forEach(t => {
+    unitTransactions.forEach(t => {
       const tDate = new Date(t.date);
       const tYear = tDate.getFullYear();
       const tMonth = tDate.getMonth() + 1;
@@ -167,7 +177,7 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
     
     let balance = 0;
     
-    bumdesTransactions.forEach(t => {
+    unitTransactions.forEach(t => {
       const tDate = new Date(t.date);
       if (tDate.getFullYear() === targetYear && (month === 'all' || (tDate.getMonth() + 1) <= targetMonth)) {
         t.journalEntries?.forEach(entry => {
@@ -214,66 +224,30 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
   const handleExportPDF = async () => {
     const element = document.getElementById('report-container');
     if (!element) return;
+
+    // Temporarily hide elements that shouldn't be in PDF
+    const noPrintElements = element.querySelectorAll('.no-print');
+    noPrintElements.forEach(el => (el as HTMLElement).style.display = 'none');
+
+    // Add pdf-export class for oklch override
+    element.classList.add('pdf-export');
+
+    const pdf = new jsPDF('l', 'mm', 'a4');
     
-    setIsExportingPDF(true);
-    // Temporarily hide buttons for PDF capture
-    const buttons = document.querySelectorAll('.no-print');
-    buttons.forEach(b => (b as HTMLElement).style.display = 'none');
-    
-    try {
-      const canvas = await html2canvas(element, { 
-        scale: 2, 
-        useCORS: true,
-        logging: false,
-        backgroundColor: '#ffffff',
-        onclone: (clonedDoc) => {
-          const elements = clonedDoc.querySelectorAll('*');
-          elements.forEach(el => {
-            const style = clonedDoc.defaultView?.getComputedStyle(el);
-            if (style) {
-              if (style.color.includes('oklch')) {
-                (el as HTMLElement).style.color = 'black';
-              }
-              if (style.backgroundColor.includes('oklch')) {
-                (el as HTMLElement).style.backgroundColor = 'white';
-              }
-              if (style.borderColor.includes('oklch')) {
-                (el as HTMLElement).style.borderColor = 'black';
-              }
-            }
-          });
-        }
-      });
-      
-      const imgData = canvas.toDataURL('image/png');
-      const pdf = new jsPDF('p', 'mm', 'a4');
-      const imgProps = pdf.getImageProperties(imgData);
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
-      const pageHeight = pdf.internal.pageSize.getHeight();
-      
-      let heightLeft = pdfHeight;
-      let position = 0;
-      
-      pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, pdfHeight);
-      heightLeft -= pageHeight;
-      
-      while (heightLeft > 0) {
-        position -= pageHeight;
-        pdf.addPage();
-        pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, pdfHeight);
-        heightLeft -= pageHeight;
-      }
-      
-      pdf.save(`${getReportTitle()}_${currentDataUmum.namaBumdesa}_${filterMonth}_${filterYear}.pdf`);
-    } catch (error) {
-      console.error('PDF Export Error:', error);
-      // Fallback to window.print if jsPDF fails
-      window.print();
-    } finally {
-      buttons.forEach(b => (b as HTMLElement).style.display = '');
-      setIsExportingPDF(false);
-    }
+    await pdf.html(element, {
+      callback: function (doc) {
+        doc.save(`${getReportTitle()}_${currentDataUmum.namaBumdesa}_${filterMonth}_${filterYear}.pdf`);
+      },
+      x: 10,
+      y: 10,
+      width: 277, // A4 landscape width - margins
+      windowWidth: element.scrollWidth,
+      autoPaging: 'text'
+    });
+
+    // Restore hidden elements
+    noPrintElements.forEach(el => (el as HTMLElement).style.display = '');
+    element.classList.remove('pdf-export');
   };
 
   const handleExportDoc = () => {
@@ -316,7 +290,7 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
     }
   };
 
-  const filteredTransactions = bumdesTransactions.filter(t => {
+  const filteredTransactions = unitTransactions.filter(t => {
     const tDate = new Date(t.date);
     const m = tDate.getMonth() + 1;
     const y = tDate.getFullYear().toString();
@@ -367,20 +341,44 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
   const renderTableContent = () => {
     // a. Laporan Kas Umum
     if (type === 'lap-kas-umum') {
-      let runningBalance = 0;
+      const targetYear = parseInt(filterYear);
+      const targetMonth = filterMonth === 'all' ? 1 : parseInt(filterMonth);
+      
+      let initialBalance = 0;
+      if (filterMonth !== 'all') {
+        const prevMonth = targetMonth === 1 ? 12 : targetMonth - 1;
+        const prevYear = targetMonth === 1 ? targetYear - 1 : targetYear;
+        initialBalance = accounts
+          .filter(a => (a.code.startsWith('1.1.01') || a.code.startsWith('1.1.02')) && !a.code.endsWith('.00'))
+          .reduce((sum, a) => sum + getAccountBalance(a.code, prevYear.toString(), prevMonth.toString()), 0);
+      } else {
+        initialBalance = accounts
+          .filter(a => (a.code.startsWith('1.1.01') || a.code.startsWith('1.1.02')) && !a.code.endsWith('.00'))
+          .reduce((sum, a) => sum + getAccountBalance(a.code, (targetYear - 1).toString(), '12'), 0);
+      }
+
+      let runningBalance = initialBalance;
       return (
         <table id="report-table" className="w-full border-collapse">
           <thead>
             <tr className="border-b-2 border-slate-400">
               <th className="px-2 py-2 text-[10px] font-bold uppercase">Tanggal</th>
               <th className="px-2 py-2 text-[10px] font-bold uppercase">Nomor Bukti</th>
-              <th className="px-2 py-2 text-[10px] font-bold uppercase">Uraian Transaksi</th>
+              <th className="px-2 py-2 text-[10px] font-bold uppercase col-uraian">Uraian Transaksi</th>
               <th className="px-2 py-2 text-[10px] font-bold uppercase text-right">Debit</th>
               <th className="px-2 py-2 text-[10px] font-bold uppercase text-right">Kredit</th>
               <th className="px-2 py-2 text-[10px] font-bold uppercase text-right">Saldo</th>
             </tr>
           </thead>
           <tbody>
+            <tr className="border-b border-slate-200 bg-slate-50 font-bold italic">
+              <td className="px-2 py-2 text-[10px] text-center">-</td>
+              <td className="px-2 py-2 text-[10px] text-center">-</td>
+              <td className="px-2 py-2 text-[10px] col-uraian uppercase">SALDO AWAL</td>
+              <td className="px-2 py-2 text-[10px] text-right">-</td>
+              <td className="px-2 py-2 text-[10px] text-right">-</td>
+              <td className="px-2 py-2 text-[10px] text-right">{formatCurrency(initialBalance)}</td>
+            </tr>
             {filteredTransactions
               .filter(t => t.journalEntries?.some(e => e.accountCode.startsWith('1.1.01') || e.accountCode.startsWith('1.1.02')))
               .map((t) => {
@@ -392,9 +390,9 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
                 
                 return (
                   <tr key={t.id} className="border-b border-slate-200">
-                    <td className="px-2 py-2 text-[10px] text-center">{t.date}</td>
+                    <td className="px-2 py-2 text-[10px] text-center">{formatDate(t.date)}</td>
                     <td className="px-2 py-2 text-[10px] text-center">{t.evidenceNo}</td>
-                    <td className="px-2 py-2 text-[10px]">{t.description}</td>
+                    <td className="px-2 py-2 text-[10px] col-uraian">{t.description}</td>
                     <td className="px-2 py-2 text-[10px] text-right">{debit > 0 ? formatCurrency(debit) : "-"}</td>
                     <td className="px-2 py-2 text-[10px] text-right">{credit > 0 ? formatCurrency(credit) : "-"}</td>
                     <td className="px-2 py-2 text-[10px] text-right font-bold">{formatCurrency(runningBalance)}</td>
@@ -402,6 +400,43 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
                 );
               })}
           </tbody>
+          <tfoot>
+            <tr className="bg-slate-100 font-bold">
+              <td colSpan={5} className="px-2 py-2 text-[10px] text-right uppercase">Saldo Kas Tunai</td>
+              <td className="px-2 py-2 text-[10px] text-right">
+                {formatCurrency(accounts.filter(a => a.code === '1.1.01.01').reduce((sum, a) => sum + getAccountBalance(a.code, filterYear, filterMonth), 0))}
+              </td>
+            </tr>
+            {accounts
+              .filter(a => a.name.toLowerCase().includes('bank') && !a.code.endsWith('.00'))
+              .map(bank => {
+                const balance = getAccountBalance(bank.code, filterYear, filterMonth);
+                if (balance === 0) return null;
+                return (
+                  <tr key={bank.id} className="bg-slate-50 font-medium italic">
+                    <td colSpan={5} className="px-2 py-2 text-[10px] text-right uppercase">{bank.name}</td>
+                    <td className="px-2 py-2 text-[10px] text-right">{formatCurrency(balance)}</td>
+                  </tr>
+                );
+              })
+            }
+            <tr className="bg-slate-100 font-bold border-t border-slate-300">
+              <td colSpan={5} className="px-2 py-2 text-[10px] text-right uppercase">Saldo Di Bank</td>
+              <td className="px-2 py-2 text-[10px] text-right">
+                {formatCurrency(accounts.filter(a => a.name.toLowerCase().includes('bank') && !a.code.endsWith('.00')).reduce((sum, a) => sum + getAccountBalance(a.code, filterYear, filterMonth), 0))}
+              </td>
+            </tr>
+            <tr className="bg-slate-200 font-bold border-t-2 border-slate-400">
+              <td colSpan={5} className="px-2 py-2 text-[10px] text-right uppercase">Jumlah Total Saldo</td>
+              <td className="px-2 py-2 text-[10px] text-right">
+                {formatCurrency(
+                  (accounts.find(a => a.code === '1.1.01.01') ? getAccountBalance('1.1.01.01', filterYear, filterMonth) : 0) +
+                  accounts.filter(a => a.name.toLowerCase().includes('bank') && !a.code.endsWith('.00'))
+                    .reduce((sum, a) => sum + getAccountBalance(a.code, filterYear, filterMonth), 0)
+                )}
+              </td>
+            </tr>
+          </tfoot>
         </table>
       );
     }
@@ -415,7 +450,7 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
               <th className="px-2 py-2 text-[10px] font-bold uppercase w-24">Tanggal</th>
               <th className="px-2 py-2 text-[10px] font-bold uppercase w-32">Nomor Bukti</th>
               <th className="px-2 py-2 text-[10px] font-bold uppercase">Kode & Nama Akun</th>
-              <th className="px-2 py-2 text-[10px] font-bold uppercase">Uraian</th>
+              <th className="px-2 py-2 text-[10px] font-bold uppercase col-uraian">Uraian</th>
               <th className="px-2 py-2 text-[10px] font-bold uppercase text-right w-32">Debit</th>
               <th className="px-2 py-2 text-[10px] font-bold uppercase text-right w-32">Kredit</th>
             </tr>
@@ -432,7 +467,7 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
                         <tr key={`${t.id}-${idx}`} className="border-b border-slate-200">
                           {idx === 0 ? (
                             <>
-                              <td rowSpan={filteredEntries.length} className="px-2 py-2 text-[10px] text-center align-top">{t.date}</td>
+                              <td rowSpan={filteredEntries.length} className="px-2 py-2 text-[10px] text-center align-top">{formatDate(t.date)}</td>
                               <td rowSpan={filteredEntries.length} className="px-2 py-2 text-[10px] text-center align-top">{t.evidenceNo}</td>
                             </>
                           ) : null}
@@ -440,7 +475,7 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
                             {entry.accountCode} - {entry.accountName}
                           </td>
                           {idx === 0 ? (
-                            <td rowSpan={filteredEntries.length} className="px-2 py-2 text-[10px] align-top">{t.description}</td>
+                            <td rowSpan={filteredEntries.length} className="px-2 py-2 text-[10px] align-top col-uraian">{t.description}</td>
                           ) : null}
                           <td className="px-2 py-1 text-[10px] text-right">{entry.debit > 0 ? formatCurrency(entry.debit) : "-"}</td>
                           <td className="px-2 py-1 text-[10px] text-right">{entry.credit > 0 ? formatCurrency(entry.credit) : "-"}</td>
@@ -448,10 +483,10 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
                       ))
                     ) : (
                       <tr className="border-b border-slate-200">
-                        <td className="px-2 py-2 text-[10px] text-center">{t.date}</td>
+                        <td className="px-2 py-2 text-[10px] text-center">{formatDate(t.date)}</td>
                         <td className="px-2 py-2 text-[10px] text-center">{t.evidenceNo}</td>
                         <td className="px-2 py-1 text-[10px] text-red-500 italic">Jurnal belum dibuat</td>
-                        <td className="px-2 py-2 text-[10px]">{t.description}</td>
+                        <td className="px-2 py-2 text-[10px] col-uraian">{t.description}</td>
                         <td className="px-2 py-1 text-[10px] text-right">-</td>
                         <td className="px-2 py-1 text-[10px] text-right">-</td>
                       </tr>
@@ -479,7 +514,7 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
           <thead>
             <tr className="border-b-2 border-slate-400">
               <th className="px-2 py-2 text-[10px] font-bold uppercase">Tanggal</th>
-              <th className="px-2 py-2 text-[10px] font-bold uppercase">Uraian Transaksi</th>
+              <th className="px-2 py-2 text-[10px] font-bold uppercase col-uraian">Uraian Transaksi</th>
               <th className="px-2 py-2 text-[10px] font-bold uppercase">Nomor Bukti</th>
               <th className="px-2 py-2 text-[10px] font-bold uppercase text-right">Debit</th>
               <th className="px-2 py-2 text-[10px] font-bold uppercase text-right">Kredit</th>
@@ -519,7 +554,7 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
               return (
                 <tr key={t.id} className="border-b border-slate-200">
                   <td className="px-2 py-2 text-[10px] text-center">{t.date}</td>
-                  <td className="px-2 py-2 text-[10px]">{t.description}</td>
+                  <td className="px-2 py-2 text-[10px] col-uraian">{t.description}</td>
                   <td className="px-2 py-2 text-[10px] text-center">{t.evidenceNo}</td>
                   <td className="px-2 py-2 text-[10px] text-right">{debit > 0 ? formatCurrency(debit) : "-"}</td>
                   <td className="px-2 py-2 text-[10px] text-right">{credit > 0 ? formatCurrency(credit) : "-"}</td>
@@ -542,7 +577,7 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
           <thead>
             <tr className="border-b-2 border-slate-400">
               <th className="px-2 py-2 text-[10px] font-bold uppercase">Nomor</th>
-              <th className="px-2 py-2 text-[10px] font-bold uppercase">Kode & Nama Akun</th>
+              <th className="px-2 py-2 text-[10px] font-bold uppercase col-uraian">Kode & Nama Akun</th>
               <th className="px-2 py-2 text-[10px] font-bold uppercase text-right">Debit</th>
               <th className="px-2 py-2 text-[10px] font-bold uppercase text-right">Kredit</th>
             </tr>
@@ -561,7 +596,7 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
               return (
                 <tr key={acc.id} className="border-b border-slate-200">
                   <td className="px-2 py-2 text-[10px] text-center">{idx + 1}</td>
-                  <td className="px-2 py-2 text-[10px]">{acc.code} - {acc.name}</td>
+                  <td className="px-2 py-2 text-[10px] col-uraian">{acc.code} - {acc.name}</td>
                   <td className="px-2 py-2 text-[10px] text-right">{debitVal > 0 ? formatCurrency(debitVal) : "-"}</td>
                   <td className="px-2 py-2 text-[10px] text-right">{creditVal > 0 ? formatCurrency(creditVal) : "-"}</td>
                 </tr>
@@ -579,8 +614,8 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
 
     // e. Laporan Laba Rugi
     if (type === 'lap-laba-rugi') {
-      const pendapatan = accounts.filter(a => a.code.startsWith('4'));
-      const beban = accounts.filter(a => a.code.startsWith('5'));
+      const pendapatan = accounts.filter(a => a.code.startsWith('4') || a.code.startsWith('7.1'));
+      const beban = accounts.filter(a => a.code.startsWith('5') || a.code.startsWith('7.2') || a.code.startsWith('7.3'));
       const monthName = filterMonth === 'all' 
         ? 'Tahunan'
         : [
@@ -598,7 +633,7 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
           <thead>
             <tr className="border-b-2 border-slate-400">
               <th className="px-2 py-2 text-[10px] font-bold uppercase">No</th>
-              <th className="px-2 py-2 text-[10px] font-bold uppercase">Uraian</th>
+              <th className="px-2 py-2 text-[10px] font-bold uppercase col-uraian">Uraian</th>
               <th className="px-2 py-2 text-[10px] font-bold uppercase text-right">1 Bulan Berjalan<br/>({monthName} {filterYear})</th>
               <th className="px-2 py-2 text-[10px] font-bold uppercase text-right">S.D. Bulan Berjalan<br/>(Jan - {monthName} {filterYear})</th>
             </tr>
@@ -613,7 +648,7 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
               return (
                 <tr key={acc.id} className="border-b border-slate-200">
                   <td className="px-2 py-1 text-[10px] text-center">{i + 1}</td>
-                  <td className="px-2 py-1 text-[10px]">{acc.name}</td>
+                  <td className="px-2 py-1 text-[10px] col-uraian">{acc.name}</td>
                   <td className="px-2 py-1 text-[10px] text-right">{formatCurrency(balCurr)}</td>
                   <td className="px-2 py-1 text-[10px] text-right">{formatCurrency(balPrev)}</td>
                 </tr>
@@ -667,7 +702,7 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
           <thead>
             <tr className="border-b-2 border-slate-400">
               <th className="px-2 py-2 text-[10px] font-bold uppercase">Nomor Urut</th>
-              <th className="px-2 py-2 text-[10px] font-bold uppercase">Uraian</th>
+              <th className="px-2 py-2 text-[10px] font-bold uppercase col-uraian">Uraian</th>
               <th className="px-2 py-2 text-[10px] font-bold uppercase text-right">Tahun Berjalan ({filterYear})</th>
             </tr>
           </thead>
@@ -678,7 +713,7 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
               return (
                 <tr key={acc.id} className="border-b border-slate-200">
                   <td className="px-2 py-1 text-[10px] text-center">{i + 1}</td>
-                  <td className="px-2 py-1 text-[10px]">{acc.name}</td>
+                  <td className="px-2 py-1 text-[10px] col-uraian">{acc.name}</td>
                   <td className="px-2 py-1 text-[10px] text-right">{formatCurrency(balance)}</td>
                 </tr>
               );
@@ -795,9 +830,6 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
             
             // Only show if there's a value
             if (balCurr !== 0 || balPrev !== 0) {
-              // If Unit Usaha filter is active, check if account belongs to that unit
-              if (filterUnitUsaha && !acc.code.includes(filterUnitUsaha)) return;
-              
               groupTotalCurr += balCurr;
               groupTotalPrev += balPrev;
               rows.push(renderRow(<span className="pl-4">{acc.name}</span>, balCurr, balPrev, false));
@@ -915,7 +947,7 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
           <thead>
             <tr className="border-b-2 border-slate-400">
               <th className="px-2 py-2 text-[10px] font-bold uppercase">Nomor Urut</th>
-              <th className="px-2 py-2 text-[10px] font-bold uppercase">Uraian</th>
+              <th className="px-2 py-2 text-[10px] font-bold uppercase col-uraian">Uraian</th>
               <th className="px-2 py-2 text-[10px] font-bold uppercase text-right">Tahun Berjalan ({filterYear})</th>
             </tr>
           </thead>
@@ -923,12 +955,12 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
             <tr className="border-b border-slate-200 font-bold"><td colSpan={3} className="px-2 py-1 text-[10px]">ARUS KAS DARI AKTIVITAS OPERASI</td></tr>
             <tr className="border-b border-slate-200">
               <td className="px-2 py-1 text-[10px] text-center">1</td>
-              <td className="px-2 py-1 text-[10px]">Penerimaan Kas dari Pelanggan / Pendapatan</td>
+              <td className="px-2 py-1 text-[10px] col-uraian">Penerimaan Kas dari Pelanggan / Pendapatan</td>
               <td className="px-2 py-1 text-[10px] text-right">{formatCurrency(cashInOp)}</td>
             </tr>
             <tr className="border-b border-slate-200">
               <td className="px-2 py-1 text-[10px] text-center">2</td>
-              <td className="px-2 py-1 text-[10px]">Pembayaran Kas kepada Pemasok dan Karyawan / Beban</td>
+              <td className="px-2 py-1 text-[10px] col-uraian">Pembayaran Kas kepada Pemasok dan Karyawan / Beban</td>
               <td className="px-2 py-1 text-[10px] text-right">({formatCurrency(cashOutOp)})</td>
             </tr>
             <tr className="border-b-2 border-slate-400 font-bold">
@@ -1176,7 +1208,7 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
 
     // k. Laporan Kolektibilitas Pinjaman
     if (type === 'lap-kolektibilitas-pinjaman') {
-      const pinjamanRefs = bumdesReferences.filter(r => ['PiutangSPP', 'PiutangUsaha', 'PiutangPegawai', 'PiutangLainnya'].includes(r.type));
+      const pinjamanRefs = bumdesReferences.filter(r => ['PiutangSPP', 'PiutangUsaha', 'PiutangPegawai', 'PiutangLainnya', 'Nasabah'].includes(r.type));
 
       return (
         <table id="report-table" className="w-full border-collapse">
@@ -1198,8 +1230,40 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
           </thead>
           <tbody>
             {pinjamanRefs.map((ref, idx) => {
-              const saldoPinjaman = ref.initialBalance || 0;
-              const tunggakanBulan = Math.floor(Math.random() * 8); // Placeholder logic
+              // Calculate actual balance
+              const nasabahTransactions = bumdesTransactions.filter(t => t.details?.nasabah === ref.name);
+              
+              let saldoPinjaman = ref.initialBalance || 0;
+              let lastPaymentDate: Date | null = null;
+              let firstDisbursementDate: Date | null = null;
+              
+              nasabahTransactions.forEach(t => {
+                const tDate = new Date(t.date);
+                if (t.details?.isPenyaluran) {
+                  saldoPinjaman += t.value;
+                  if (!firstDisbursementDate || tDate < firstDisbursementDate) {
+                    firstDisbursementDate = tDate;
+                  }
+                } else if (t.details?.isAngsuran) {
+                  // In Angsuran, 'price' is usually the principal, 'value' might include interest
+                  const principal = t.details.price || t.value;
+                  saldoPinjaman -= principal;
+                  if (!lastPaymentDate || tDate > lastPaymentDate) {
+                    lastPaymentDate = tDate;
+                  }
+                }
+              });
+
+              // Calculate months since last payment or disbursement
+              let tunggakanBulan = 0;
+              if (saldoPinjaman > 0) {
+                const now = new Date();
+                // If never paid, use first disbursement date. If never disbursed, use today (0 months).
+                const referenceDate = lastPaymentDate || firstDisbursementDate || now;
+                
+                const diffTime = Math.abs(now.getTime() - referenceDate.getTime());
+                tunggakanBulan = Math.floor(diffTime / (1000 * 60 * 60 * 24 * 30));
+              }
               
               let kol = '';
               if (tunggakanBulan === 0) kol = 'I';
@@ -1213,7 +1277,7 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
                   <td className="px-2 py-2 text-[10px] text-center border border-slate-200">{idx + 1}</td>
                   <td className="px-2 py-2 text-[10px] text-center border border-slate-200">12</td>
                   <td className="px-2 py-2 text-[10px] border border-slate-200">{ref.name}</td>
-                  <td className="px-2 py-2 text-[10px] text-right border border-slate-200">{formatCurrency(saldoPinjaman)}</td>
+                  <td className="px-2 py-2 text-[10px] text-right border border-slate-200 font-bold">{formatCurrency(saldoPinjaman)}</td>
                   <td className="px-2 py-2 text-[10px] text-right border border-slate-200">{kol === 'I' ? formatCurrency(saldoPinjaman) : '-'}</td>
                   <td className="px-2 py-2 text-[10px] text-right border border-slate-200">{kol === 'II' ? formatCurrency(saldoPinjaman) : '-'}</td>
                   <td className="px-2 py-2 text-[10px] text-right border border-slate-200">{kol === 'III' ? formatCurrency(saldoPinjaman) : '-'}</td>
@@ -1222,6 +1286,13 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
                 </tr>
               );
             })}
+            {pinjamanRefs.length === 0 && (
+              <tr>
+                <td colSpan={9} className="px-2 py-8 text-[10px] text-center italic text-slate-400">
+                  Tidak ada data nasabah pinjaman.
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       );
@@ -1312,19 +1383,23 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
             onChange={(e) => setFilterYear(e.target.value)}
             className="w-full sm:w-auto bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-bold text-slate-700 focus:ring-2 focus:ring-emerald-500/20 outline-none"
           >
-            <option value="2025">2025</option>
-            <option value="2026">2026</option>
+            {Array.from({ length: 10 }, (_, i) => (new Date().getFullYear() - 9 + i).toString()).map(y => (
+              <option key={y} value={y}>{y}</option>
+            ))}
           </select>
 
-          {type === 'lap-neraca' && (
+          {(type === 'lap-neraca' || type === 'lap-laba-rugi') && (
             <select 
               value={filterUnitUsaha}
               onChange={(e) => setFilterUnitUsaha(e.target.value)}
               className="w-full sm:w-auto bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-bold text-slate-700 focus:ring-2 focus:ring-emerald-500/20 outline-none"
             >
-              <option value="">Semua Unit Usaha</option>
-              <option value="UnitUmum">Unit Usaha Umum</option>
-              <option value="UnitPerdagangan">Unit Usaha Perdagangan</option>
+              <option value="all">Semua Unit Usaha</option>
+              <option value="">Kantor Pusat (PST)</option>
+              <option value="SPP">Unit Usaha Simpan Pinjam</option>
+              {bumdesReferences.filter(r => r.type === 'UnitUmum' || r.type === 'UnitPerdagangan').map(unit => (
+                <option key={unit.id} value={unit.id}>{unit.name}</option>
+              ))}
             </select>
           )}
           
@@ -1451,7 +1526,8 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
       <PrintModal 
         isOpen={isPrintModalOpen} 
         onClose={() => setIsPrintModalOpen(false)} 
-        onPrint={() => { setIsPrintModalOpen(false); window.focus(); window.print(); }} 
+        onPrint={() => { setIsPrintModalOpen(false); window.print(); }} 
+        onPreview={() => { setIsPrintModalOpen(false); window.print(); }}
         title="Cetak Laporan"
       />
 
@@ -1492,7 +1568,7 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
         </div>
 
         {/* Signature Section */}
-        <div className="flex justify-end mt-8 md:mt-12">
+        <div className="flex justify-end mt-8 md:mt-12 break-inside-avoid">
           <div className="flex flex-col items-center text-center w-64">
             <p className="text-[10px] font-bold text-slate-700 mb-1 uppercase tracking-widest">
               {currentDataUmum.desa || currentDataUmum.kecamatan || currentDataUmum.kabupaten || '....................'}, {formatDate(new Date())}

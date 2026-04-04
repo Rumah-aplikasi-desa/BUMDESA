@@ -16,7 +16,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = 3000; // Force port 3000 as per infrastructure requirements
 const JWT_SECRET = process.env.JWT_SECRET || 'bumdesa-secret-key-2026';
 
 app.use(cors());
@@ -29,13 +29,15 @@ let sheets: any = null;
 
 async function getSheetsClient() {
   if (sheets) return sheets;
-  if (!SERVICE_ACCOUNT_KEY) {
-    console.warn('GOOGLE_SERVICE_ACCOUNT_KEY is not set. Google Sheets integration will not work.');
+  if (!SERVICE_ACCOUNT_KEY || SERVICE_ACCOUNT_KEY.includes('service_account", ...}')) {
+    console.warn('GOOGLE_SERVICE_ACCOUNT_KEY is not set or is using a placeholder. Google Sheets integration will not work.');
     return null;
   }
 
   try {
-    const key = JSON.parse(SERVICE_ACCOUNT_KEY);
+    // Trim and remove potential surrounding quotes from the environment variable
+    const cleanKey = SERVICE_ACCOUNT_KEY.trim().replace(/^['"]|['"]$/g, '');
+    const key = JSON.parse(cleanKey);
     const auth = new JWT({
       email: key.client_email,
       key: key.private_key,
@@ -44,7 +46,7 @@ async function getSheetsClient() {
     sheets = google.sheets({ version: 'v4', auth });
     return sheets;
   } catch (error) {
-    console.error('Error initializing Google Sheets client:', error);
+    console.error('Error initializing Google Sheets client. Check if GOOGLE_SERVICE_ACCOUNT_KEY is valid JSON:', error);
     return null;
   }
 }
@@ -78,21 +80,69 @@ const SHEETS_CONFIG = {
   Users: ['Id', 'Username', 'Password', 'Email', 'Role', 'CreatedAt'],
 };
 
+// Helper for Google API rate limiting (429)
+async function withRetry(fn: () => Promise<any>, retries = 5, delay = 2000): Promise<any> {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      const statusCode = error.code || (error.response && error.response.status);
+      if (statusCode === 429 && i < retries - 1) {
+        const waitTime = delay * Math.pow(2, i);
+        console.warn(`[SERVER] Rate limit exceeded (429), retrying in ${waitTime}ms... (Attempt ${i + 1}/${retries})`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error('Max retries reached');
+}
+
+// Simple in-memory cache
+const cache: Record<string, { data: any, timestamp: number }> = {};
+const CACHE_TTL = 10000; // 10 seconds
+
+function getFromCache(key: string) {
+  const cached = cache[key];
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    return cached.data;
+  }
+  return null;
+}
+
+function setInCache(key: string, data: any) {
+  cache[key] = { data, timestamp: Date.now() };
+}
+
+function clearCache(sheetName?: string) {
+  if (sheetName) {
+    // Clear specific sheet cache
+    Object.keys(cache).forEach(key => {
+      if (key.startsWith(sheetName)) {
+        delete cache[key];
+      }
+    });
+  } else {
+    // Clear all cache
+    Object.keys(cache).forEach(key => delete cache[key]);
+  }
+}
+
 async function initializeSpreadsheet() {
-  const client = await getSheetsClient();
-  if (!client) return;
-  const { sheets } = client;
+  const sheets = await getSheetsClient();
+  if (!sheets) return;
 
   try {
-    const spreadsheet = await client.spreadsheets.get({
+    const spreadsheet = await withRetry(() => sheets.spreadsheets.get({
       spreadsheetId: SPREADSHEET_ID,
-    });
+    }));
 
     const existingSheets = spreadsheet.data.sheets?.map((s: any) => s.properties.title) || [];
 
     for (const [sheetName, headers] of Object.entries(SHEETS_CONFIG)) {
       if (!existingSheets.includes(sheetName)) {
-        await client.spreadsheets.batchUpdate({
+        await withRetry(() => sheets.spreadsheets.batchUpdate({
           spreadsheetId: SPREADSHEET_ID,
           requestBody: {
             requests: [
@@ -103,26 +153,26 @@ async function initializeSpreadsheet() {
               },
             ],
           },
-        });
+        }));
         console.log(`Created sheet: ${sheetName}`);
       }
       
       // Always ensure headers are up to date
-      await client.spreadsheets.values.update({
+      await withRetry(() => sheets.spreadsheets.values.update({
         spreadsheetId: SPREADSHEET_ID,
         range: `${sheetName}!1:1`,
         valueInputOption: 'RAW',
         requestBody: {
           values: [headers],
         },
-      });
+      }));
 
       // Add default admin user if it's the Users sheet and it's empty
       if (sheetName === 'Users') {
-        const userResponse = await client.spreadsheets.values.get({
+        const userResponse = await withRetry(() => sheets.spreadsheets.values.get({
           spreadsheetId: SPREADSHEET_ID,
           range: 'Users!A2:A',
-        });
+        }));
         if (!userResponse.data.values || userResponse.data.values.length === 0) {
           const hashedPassword = await bcrypt.hash('admin123', 10);
           const defaultAdmin = [
@@ -133,7 +183,7 @@ async function initializeSpreadsheet() {
             'Owner',
             new Date().toISOString()
           ];
-          await client.spreadsheets.values.append({
+          await sheets.spreadsheets.values.append({
             spreadsheetId: SPREADSHEET_ID,
             range: 'Users!A2',
             valueInputOption: 'RAW',
@@ -150,6 +200,21 @@ async function initializeSpreadsheet() {
   }
 }
 
+// Health Check
+app.get('/api/health', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    env: {
+      hasGeminiKey: !!process.env.GEMINI_API_KEY,
+      hasSheetsKey: !!process.env.GOOGLE_SERVICE_ACCOUNT_KEY,
+      hasSpreadsheetId: !!process.env.GOOGLE_SPREADSHEET_ID,
+      geminiKeyLength: process.env.GEMINI_API_KEY?.length || 0,
+      geminiKeyStart: process.env.GEMINI_API_KEY ? `${process.env.GEMINI_API_KEY.substring(0, 4)}...` : 'none'
+    }
+  });
+});
+
 // Auth Routes
 app.post('/api/auth/login', async (req, res) => {
   const { username, password } = req.body;
@@ -161,10 +226,10 @@ app.post('/api/auth/login', async (req, res) => {
   }
 
   try {
-    const response = await client.spreadsheets.values.get({
+    const response = await withRetry(() => client.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
       range: 'Users!A2:Z',
-    });
+    }));
 
     const rows = response.data.values || [];
     const headers = SHEETS_CONFIG.Users;
@@ -239,10 +304,10 @@ app.post('/api/auth/register', async (req, res) => {
   }
 
   try {
-    const response = await client.spreadsheets.values.get({
+    const response = await withRetry(() => client.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
       range: 'Users!A2:Z',
-    });
+    }));
 
     const rows = response.data.values || [];
     const headers = SHEETS_CONFIG.Users;
@@ -271,14 +336,14 @@ app.post('/api/auth/register', async (req, res) => {
 
     const row = headers.map(header => (newUser as any)[header] || '');
 
-    await client.spreadsheets.values.append({
+    await withRetry(() => client.spreadsheets.values.append({
       spreadsheetId: SPREADSHEET_ID,
       range: 'Users!A2',
       valueInputOption: 'RAW',
       requestBody: {
         values: [row],
       },
-    });
+    }));
 
     res.json({ success: true });
   } catch (error) {
@@ -301,9 +366,96 @@ const authenticateToken = (req: express.Request, res: express.Response, next: ex
 };
 
 // API Routes
+app.get('/api/sheets/batch', authenticateToken, async (req, res) => {
+  const user = (req as any).user;
+  const client = await getSheetsClient();
+  if (!client) {
+    return res.status(500).json({ 
+      error: 'Google Sheets API belum dikonfigurasi.' 
+    });
+  }
+
+  const sheetsToFetch = ['DataUmum', 'Accounts', 'References', 'Transactions'];
+  const results: Record<string, any[]> = {};
+
+  try {
+    for (const sheetName of sheetsToFetch) {
+      const cacheKey = `${sheetName}_${user.id}_${user.role}`;
+      const cachedData = getFromCache(cacheKey);
+      if (cachedData) {
+        console.log(`[SERVER] Cache hit for ${sheetName} in batch (${user.id})`);
+        results[sheetName] = cachedData;
+        continue;
+      }
+
+      const response = await withRetry(() => client.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: `${sheetName}!A2:Z`,
+      }));
+
+      const rows = response.data.values || [];
+      const headers = SHEETS_CONFIG[sheetName as keyof typeof SHEETS_CONFIG];
+      
+      const data = rows.map((row: any) => {
+        const obj: any = {};
+        headers.forEach((header, index) => {
+          obj[header] = row[index] || '';
+        });
+        return obj;
+      });
+
+      // Filter data (simplified for batch)
+      let filteredData = data;
+      if (sheetName === 'Accounts' && user.role !== 'Owner') {
+        // We'll skip complex filtering for batch for now or implement it
+        // For simplicity, let's just use the same logic as the single route
+        try {
+          const usersResponse = await withRetry(() => client.spreadsheets.values.get({
+            spreadsheetId: SPREADSHEET_ID,
+            range: 'Users!A2:Z',
+          }));
+          const userRows = usersResponse.data.values || [];
+          const userHeaders = SHEETS_CONFIG.Users;
+          const ownerIds = userRows
+            .map((row: any) => {
+              const u: any = {};
+              userHeaders.forEach((h, i) => u[h] = row[i] || '');
+              return u;
+            })
+            .filter((u: any) => u.Role === 'Owner')
+            .map((u: any) => u.Id);
+
+          filteredData = data.filter((d: any) => d.UserId === user.id || ownerIds.includes(d.UserId));
+        } catch (err) {
+          filteredData = data.filter((d: any) => d.UserId === user.id);
+        }
+      } else if (user.role !== 'Owner' && user.role !== 'Admin') {
+        filteredData = data.filter((d: any) => d.UserId === user.id);
+      }
+
+      setInCache(cacheKey, filteredData);
+      results[sheetName] = filteredData;
+    }
+
+    res.json(results);
+  } catch (error: any) {
+    console.error('Error in batch fetch:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.get('/api/sheets/:sheetName', authenticateToken, async (req, res) => {
   const { sheetName } = req.params;
   const user = (req as any).user;
+
+  // Check cache first
+  const cacheKey = `${sheetName}_${user.id}_${user.role}`;
+  const cachedData = getFromCache(cacheKey);
+  if (cachedData) {
+    console.log(`[SERVER] Cache hit for ${sheetName} (${user.id})`);
+    return res.json(cachedData);
+  }
+
   const client = await getSheetsClient();
   if (!client) {
     return res.status(500).json({ 
@@ -312,10 +464,10 @@ app.get('/api/sheets/:sheetName', authenticateToken, async (req, res) => {
   }
 
   try {
-    const response = await client.spreadsheets.values.get({
+    const response = await withRetry(() => client.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
       range: `${sheetName}!A2:Z`,
-    });
+    }));
 
     const rows = response.data.values || [];
     const headers = SHEETS_CONFIG[sheetName as keyof typeof SHEETS_CONFIG];
@@ -333,10 +485,10 @@ app.get('/api/sheets/:sheetName', authenticateToken, async (req, res) => {
     if (sheetName === 'Accounts' && user.role !== 'Owner') {
       // For Accounts, everyone except Owner sees their own + Owner's accounts
       try {
-        const usersResponse = await client.spreadsheets.values.get({
+        const usersResponse = await withRetry(() => client.spreadsheets.values.get({
           spreadsheetId: SPREADSHEET_ID,
           range: 'Users!A2:Z',
-        });
+        }));
         const userRows = usersResponse.data.values || [];
         const userHeaders = SHEETS_CONFIG.Users;
         const ownerIds = userRows
@@ -361,6 +513,7 @@ app.get('/api/sheets/:sheetName', authenticateToken, async (req, res) => {
       }
     }
 
+    setInCache(cacheKey, filteredData);
     res.json(filteredData);
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });
@@ -385,6 +538,7 @@ app.post('/api/sheets/:sheetName', authenticateToken, async (req, res) => {
   const { sheetName } = req.params;
   const data = req.body;
   const user = (req as any).user;
+  console.log(`POST /api/sheets/${sheetName} from user ${user.username}`);
   const client = await getSheetsClient();
   if (!client) {
     return res.status(500).json({ 
@@ -401,17 +555,20 @@ app.post('/api/sheets/:sheetName', authenticateToken, async (req, res) => {
     const headers = SHEETS_CONFIG[sheetName as keyof typeof SHEETS_CONFIG];
     const row = headers.map(header => data[header] || '');
 
-    await client.spreadsheets.values.append({
+    console.log(`Appending row to ${sheetName}, payload size: ${JSON.stringify(data).length}`);
+    await withRetry(() => client.spreadsheets.values.append({
       spreadsheetId: SPREADSHEET_ID,
       range: `${sheetName}!A2`,
       valueInputOption: 'RAW',
       requestBody: {
         values: [row],
       },
-    });
+    }));
 
+    clearCache(sheetName);
     res.json({ success: true });
   } catch (error) {
+    console.error(`Error in POST /api/sheets/${sheetName}:`, error);
     res.status(500).json({ error: (error as Error).message });
   }
 });
@@ -442,15 +599,16 @@ app.post('/api/sheets/:sheetName/batch', authenticateToken, async (req, res) => 
     const headers = SHEETS_CONFIG[sheetName as keyof typeof SHEETS_CONFIG];
     const rows = dataArray.map((data: any) => headers.map(header => data[header] || ''));
 
-    await client.spreadsheets.values.append({
+    await withRetry(() => client.spreadsheets.values.append({
       spreadsheetId: SPREADSHEET_ID,
       range: `${sheetName}!A2`,
       valueInputOption: 'RAW',
       requestBody: {
         values: rows,
       },
-    });
+    }));
 
+    clearCache(sheetName);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });
@@ -462,6 +620,7 @@ app.put('/api/sheets/:sheetName/:id', authenticateToken, async (req, res) => {
   const { sheetName, id } = req.params;
   const data = req.body;
   const user = (req as any).user;
+  console.log(`PUT /api/sheets/${sheetName}/${id} from user ${user.username}`);
   const client = await getSheetsClient();
   if (!client) {
     return res.status(500).json({ 
@@ -470,10 +629,10 @@ app.put('/api/sheets/:sheetName/:id', authenticateToken, async (req, res) => {
   }
 
   try {
-    const response = await client.spreadsheets.values.get({
+    const response = await withRetry(() => client.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
       range: `${sheetName}!A:Z`,
-    });
+    }));
 
     const rows = response.data.values || [];
     const headers = SHEETS_CONFIG[sheetName as keyof typeof SHEETS_CONFIG];
@@ -490,7 +649,10 @@ app.put('/api/sheets/:sheetName/:id', authenticateToken, async (req, res) => {
       }
     }
 
-    if (rowIndex === -1) return res.status(404).json({ error: 'Record not found or unauthorized' });
+    if (rowIndex === -1) {
+      console.warn(`Record not found or unauthorized for PUT /api/sheets/${sheetName}/${id}`);
+      return res.status(404).json({ error: 'Record not found or unauthorized' });
+    }
 
     // Inject UserId to prevent overwriting it with empty
     if (sheetName !== 'Users') {
@@ -499,10 +661,10 @@ app.put('/api/sheets/:sheetName/:id', authenticateToken, async (req, res) => {
     
     // Special handling for Users sheet to manage passwords
     if (sheetName === 'Users') {
-      const response = await client.spreadsheets.values.get({
+      const response = await withRetry(() => client.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
         range: `Users!A${rowIndex + 1}:Z${rowIndex + 1}`,
-      });
+      }));
       const currentRow = response.data.values?.[0] || [];
       const passwordIndex = headers.indexOf('Password');
       
@@ -518,17 +680,20 @@ app.put('/api/sheets/:sheetName/:id', authenticateToken, async (req, res) => {
 
     const row = headers.map(header => data[header] || '');
 
-    await client.spreadsheets.values.update({
+    console.log(`Updating row ${rowIndex + 1} in ${sheetName}, payload size: ${JSON.stringify(data).length}`);
+    await withRetry(() => client.spreadsheets.values.update({
       spreadsheetId: SPREADSHEET_ID,
       range: `${sheetName}!A${rowIndex + 1}`,
       valueInputOption: 'RAW',
       requestBody: {
         values: [row],
       },
-    });
+    }));
 
+    clearCache(sheetName);
     res.json({ success: true });
   } catch (error) {
+    console.error(`Error in PUT /api/sheets/${sheetName}/${id}:`, error);
     res.status(500).json({ error: (error as Error).message });
   }
 });
@@ -543,10 +708,10 @@ app.delete('/api/sheets/:sheetName/:id', authenticateToken, async (req, res) => 
   }
 
   try {
-    const response = await client.spreadsheets.values.get({
+    const response = await withRetry(() => client.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
       range: `${sheetName}!A:Z`,
-    });
+    }));
 
     const rows = response.data.values || [];
     const headers = SHEETS_CONFIG[sheetName as keyof typeof SHEETS_CONFIG];
@@ -567,10 +732,10 @@ app.delete('/api/sheets/:sheetName/:id', authenticateToken, async (req, res) => 
     if (rowIndex === -1) return res.status(404).json({ error: 'Record not found or unauthorized' });
 
     // In Sheets API, deleting a row is a batchUpdate
-    const spreadsheet = await client.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
+    const spreadsheet = await withRetry(() => client.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID }));
     const sheetId = spreadsheet.data.sheets?.find((s: any) => s.properties.title === sheetName)?.properties.sheetId;
 
-    await client.spreadsheets.batchUpdate({
+    await withRetry(() => client.spreadsheets.batchUpdate({
       spreadsheetId: SPREADSHEET_ID,
       requestBody: {
         requests: [
@@ -586,8 +751,9 @@ app.delete('/api/sheets/:sheetName/:id', authenticateToken, async (req, res) => 
           },
         ],
       },
-    });
+    }));
 
+    clearCache(sheetName);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });
@@ -605,15 +771,15 @@ app.post('/api/sheets/:sheetName/clear', authenticateToken, async (req, res) => 
   }
 
   try {
-    const response = await client.spreadsheets.values.get({
+    const response = await withRetry(() => client.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
       range: `${sheetName}!A:Z`,
-    });
+    }));
 
     const rows = response.data.values || [];
     const headers = SHEETS_CONFIG[sheetName as keyof typeof SHEETS_CONFIG];
     const userIdIndex = headers.indexOf('UserId');
-    const spreadsheet = await client.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
+    const spreadsheet = await withRetry(() => client.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID }));
     const sheetId = spreadsheet.data.sheets?.find((s: any) => s.properties.title === sheetName)?.properties.sheetId;
 
     if (sheetId === undefined) {
@@ -646,11 +812,12 @@ app.post('/api/sheets/:sheetName/clear', authenticateToken, async (req, res) => 
       },
     }));
 
-    await client.spreadsheets.batchUpdate({
+    await withRetry(() => client.spreadsheets.batchUpdate({
       spreadsheetId: SPREADSHEET_ID,
       requestBody: { requests },
-    });
+    }));
 
+    clearCache(sheetName);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });
@@ -672,10 +839,10 @@ app.post('/api/sheets/:sheetName/batch-delete', authenticateToken, async (req, r
   }
 
   try {
-    const response = await client.spreadsheets.values.get({
+    const response = await withRetry(() => client.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
       range: `${sheetName}!A:Z`,
-    });
+    }));
 
     const rows = response.data.values || [];
     const headers = SHEETS_CONFIG[sheetName as keyof typeof SHEETS_CONFIG];
@@ -702,7 +869,7 @@ app.post('/api/sheets/:sheetName/batch-delete', authenticateToken, async (req, r
       return res.json({ success: true, message: 'No records found to delete or unauthorized' });
     }
 
-    const spreadsheet = await client.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
+    const spreadsheet = await withRetry(() => client.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID }));
     const sheetId = spreadsheet.data.sheets?.find((s: any) => s.properties.title === sheetName)?.properties.sheetId;
 
     if (sheetId === undefined) {
@@ -721,13 +888,14 @@ app.post('/api/sheets/:sheetName/batch-delete', authenticateToken, async (req, r
       },
     }));
 
-    await client.spreadsheets.batchUpdate({
+    await withRetry(() => client.spreadsheets.batchUpdate({
       spreadsheetId: SPREADSHEET_ID,
       requestBody: {
         requests,
       },
-    });
+    }));
 
+    clearCache(sheetName);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });
@@ -767,11 +935,12 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`[SERVER] Running on http://0.0.0.0:${PORT}`);
+    console.log(`[SERVER] Environment: ${process.env.NODE_ENV || 'development'}`);
     
     // Initialize spreadsheet in the background after server starts
     initializeSpreadsheet().catch(error => {
-      console.error('Failed to initialize spreadsheet:', error);
+      console.error('[SERVER] Failed to initialize spreadsheet:', error);
     });
   });
 }

@@ -15,7 +15,8 @@ import {
   AlertCircle,
   ChevronRight,
   Trash2,
-  Edit2
+  Edit2,
+  Filter
 } from 'lucide-react';
 import { parseTransactionWithAI } from '../services/geminiService';
 import { Transaction, Reference, Account } from '../types';
@@ -38,6 +39,7 @@ export const Transaksi: React.FC<TransaksiProps> = ({ accounts, references }) =>
   const [aiPrompt, setAiPrompt] = useState('');
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [filterType, setFilterType] = useState<string>('Semua');
   const [editingId, setEditingId] = useState<string | null>(null);
   
   const [formData, setFormData] = useState<Partial<Transaction> & { debitAccountId?: string, creditAccountId?: string, unitId?: string }>({
@@ -156,10 +158,11 @@ export const Transaksi: React.FC<TransaksiProps> = ({ accounts, references }) =>
           setIsCashFlowModalOpen(true);
         }
       } else {
+        console.error('AI Parse failed: parseTransactionWithAI returned null');
         alert('Maaf, AI gagal memproses perintah Anda. Pastikan deskripsi transaksi cukup jelas.');
       }
     } catch (error) {
-      console.error('AI Error:', error);
+      console.error('AI Error in handleAiParse:', error);
       alert('Terjadi kesalahan saat menghubungi AI.');
     } finally {
       setIsAiLoading(false);
@@ -189,6 +192,7 @@ export const Transaksi: React.FC<TransaksiProps> = ({ accounts, references }) =>
       cashFlowSubCategory: transaction.cashFlowSubCategory || '',
       cashFlowItem: transaction.cashFlowItem || '',
       unitId: transaction.unitId || '',
+      details: transaction.details,
       debitAccountId: transaction.type === 'Saldo Awal' ? (debitEntry?.accountId || creditEntry?.accountId || '') : (debitEntry?.accountId || ''),
       creditAccountId: transaction.type === 'Saldo Awal' ? '' : (creditEntry?.accountId || '')
     });
@@ -213,38 +217,41 @@ export const Transaksi: React.FC<TransaksiProps> = ({ accounts, references }) =>
       
       if (formData.type === 'Saldo Awal') {
         const selectedAcc = accounts.find(a => a.id === formData.debitAccountId || a.id === formData.creditAccountId);
-        if (selectedAcc) {
-          const isDebitNormal = selectedAcc.normalBalance === 'Debit';
-          journalEntries.push({
-            accountId: selectedAcc.id,
-            accountCode: selectedAcc.code,
-            accountName: selectedAcc.name,
-            debit: isDebitNormal ? (formData.value || 0) : 0,
-            credit: !isDebitNormal ? (formData.value || 0) : 0
-          });
+        if (!selectedAcc) {
+          alert('Pilih akun terlebih dahulu!');
+          return;
         }
+        const isDebitNormal = selectedAcc.normalBalance === 'Debit';
+        journalEntries.push({
+          accountId: selectedAcc.id,
+          accountCode: selectedAcc.code,
+          accountName: selectedAcc.name,
+          debit: isDebitNormal ? (formData.value || 0) : 0,
+          credit: !isDebitNormal ? (formData.value || 0) : 0
+        });
       } else {
         const debitAcc = accounts.find(a => a.id === formData.debitAccountId);
         const creditAcc = accounts.find(a => a.id === formData.creditAccountId);
 
-        if (debitAcc) {
-          journalEntries.push({
-            accountId: debitAcc.id,
-            accountCode: debitAcc.code,
-            accountName: debitAcc.name,
-            debit: formData.value || 0,
-            credit: 0
-          });
+        if (!debitAcc || !creditAcc) {
+          alert('Pilih Akun Debit dan Akun Kredit yang valid dari daftar!');
+          return;
         }
-        if (creditAcc) {
-          journalEntries.push({
-            accountId: creditAcc.id,
-            accountCode: creditAcc.code,
-            accountName: creditAcc.name,
-            debit: 0,
-            credit: formData.value || 0
-          });
-        }
+
+        journalEntries.push({
+          accountId: debitAcc.id,
+          accountCode: debitAcc.code,
+          accountName: debitAcc.name,
+          debit: formData.value || 0,
+          credit: 0
+        });
+        journalEntries.push({
+          accountId: creditAcc.id,
+          accountCode: creditAcc.code,
+          accountName: creditAcc.name,
+          debit: 0,
+          credit: formData.value || 0
+        });
       }
 
       const finalData = {
@@ -258,7 +265,7 @@ export const Transaksi: React.FC<TransaksiProps> = ({ accounts, references }) =>
         CashFlowSubCategory: formData.type === 'Saldo Awal' ? '' : (formData.cashFlowSubCategory || ''),
         CashFlowItem: formData.type === 'Saldo Awal' ? '' : (formData.cashFlowItem || ''),
         UnitId: formData.unitId || '',
-        Details: subModalType !== 'None' ? JSON.stringify(subFormData) : '',
+        Details: (subModalType !== 'None' || formData.type === 'Invoice' || formData.type === 'NotaPesan') ? JSON.stringify(formData.details || subFormData) : '',
         JournalEntries: JSON.stringify(journalEntries),
         UserId: (JSON.parse(sessionStorage.getItem('bumdesa_user') || '{}')).id
       };
@@ -310,8 +317,9 @@ export const Transaksi: React.FC<TransaksiProps> = ({ accounts, references }) =>
   };
 
   const filteredTransactions = transactions.filter(t => 
-    t.evidenceNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    t.description.toLowerCase().includes(searchTerm.toLowerCase())
+    (t.evidenceNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    t.description.toLowerCase().includes(searchTerm.toLowerCase())) &&
+    (filterType === 'Semua' || t.type === filterType)
   );
 
   const persediaanRefs = references.filter(r => r.type === 'Persediaan');
@@ -378,9 +386,30 @@ export const Transaksi: React.FC<TransaksiProps> = ({ accounts, references }) =>
         </div>
       </div>
 
+      {/* AI Loading Overlay */}
+      <AnimatePresence>
+        {isAiLoading && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              className="relative bg-white p-8 rounded-3xl shadow-2xl flex flex-col items-center gap-4 max-w-xs w-full text-center"
+            >
+              <div className="w-16 h-16 bg-emerald-50 text-emerald-500 rounded-full flex items-center justify-center mb-2">
+                <Loader2 className="animate-spin" size={32} />
+              </div>
+              <h3 className="text-lg font-bold text-slate-800">Menganalisis dengan AI</h3>
+              <p className="text-sm text-slate-500">Mohon tunggu sebentar, AI sedang memproses deskripsi transaksi Anda...</p>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* Transaction List Table */}
       <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
-        <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+        <div className="p-6 border-b border-slate-100 flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="relative max-w-md w-full">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
             <input 
@@ -390,6 +419,24 @@ export const Transaksi: React.FC<TransaksiProps> = ({ accounts, references }) =>
               placeholder="Cari nomor bukti atau uraian..."
               className="w-full pl-11 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all"
             />
+          </div>
+          <div className="flex items-center gap-2 w-full md:w-auto">
+            <Filter size={18} className="text-slate-400" />
+            <select 
+              value={filterType}
+              onChange={(e) => setFilterType(e.target.value)}
+              className="flex-1 md:flex-none bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-700 focus:ring-2 focus:ring-emerald-500/20 outline-none"
+            >
+              <option value="Semua">Semua Tipe</option>
+              <option value="Normal">Normal</option>
+              <option value="Perdagangan">Perdagangan</option>
+              <option value="Asset">Asset</option>
+              <option value="Saldo Awal">Saldo Awal</option>
+              <option value="Piutang">Piutang</option>
+              <option value="Hutang">Hutang</option>
+              <option value="Invoice">Invoice</option>
+              <option value="NotaPesan">Nota Pesan</option>
+            </select>
           </div>
         </div>
         <div className="overflow-x-auto">
@@ -495,6 +542,7 @@ export const Transaksi: React.FC<TransaksiProps> = ({ accounts, references }) =>
                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm"
                   >
                     <option value="">Kantor Pusat (PST)</option>
+                    <option value="SPP">Unit Usaha Simpan Pinjam</option>
                     {references.filter(r => r.type === 'UnitUmum' || r.type === 'UnitPerdagangan').map(unit => (
                       <option key={unit.id} value={unit.id}>{unit.name}</option>
                     ))}
@@ -559,6 +607,31 @@ export const Transaksi: React.FC<TransaksiProps> = ({ accounts, references }) =>
                     />
                   </div>
                 </div>
+
+                {(formData.type === 'Invoice' || formData.type === 'NotaPesan') && (
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <label className="text-sm font-bold text-slate-700">Kepada</label>
+                      <input 
+                        type="text" 
+                        value={formData.details?.kepada || ''}
+                        onChange={(e) => setFormData({...formData, details: {...(formData.details as any), kepada: e.target.value}})}
+                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm"
+                        placeholder="Nama penerima..."
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-bold text-slate-700">Alamat</label>
+                      <input 
+                        type="text" 
+                        value={formData.details?.alamat || ''}
+                        onChange={(e) => setFormData({...formData, details: {...(formData.details as any), alamat: e.target.value}})}
+                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm"
+                        placeholder="Alamat penerima..."
+                      />
+                    </div>
+                  </div>
+                )}
 
                 <div className="space-y-2">
                   <div className="flex justify-between items-center">

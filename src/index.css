@@ -1,15 +1,60 @@
 @import "tailwindcss";
 
+.pdf-export {
+  --color-sky-600: #0284c7;
+  --color-sky-700: #0369a1;
+  --color-red-500: #ef4444;
+  --color-emerald-500: #10b981;
+  --color-slate-900: #111827;
+  --color-slate-50: #f8fafc;
+  --color-slate-100: #f1f5f9;
+  --color-slate-200: #e2e8f0;
+  --color-slate-400: #94a3b8;
+  --color-slate-500: #64748b;
+  --color-slate-600: #475569;
+  --color-slate-700: #334155;
+  --color-blue-600: #2563eb;
+  --color-blue-50: #eff6ff;
+  --color-amber-500: #f59e0b;
+  --color-emerald-600: #059669;
+  --color-emerald-50: #ecfdf5;
+  --color-red-600: #dc2626;
+  --color-red-50: #fef2f2;
+}
+
 #report-table, #buku-bantu-table {
-  border-collapse: separate;
+  border-collapse: collapse !important;
   border-spacing: 0;
-  border: none !important;
+  border: 1px solid #000 !important;
 }
 #report-table th, #report-table td, #buku-bantu-table th, #buku-bantu-table td {
   border: 1px solid #000 !important;
 }
 
+/* PDF Export Overrides */
+.pdf-export #report-table, 
+.pdf-export #buku-bantu-table,
+.pdf-export #report-table th, 
+.pdf-export #report-table td, 
+.pdf-export #buku-bantu-table th, 
+.pdf-export #buku-bantu-table td {
+  border: 0.1px solid #999 !important;
+}
+
+.pdf-export thead {
+  display: table-header-group !important;
+}
+
+.pdf-export tr {
+  page-break-inside: avoid !important;
+  break-inside: avoid !important;
+}
+
 @media print {
+  @page {
+    size: landscape;
+    margin: 10mm;
+  }
   body * {
     visibility: hidden;
   }
@@ -25,4 +70,56 @@
     width: 100%;
     box-shadow: none !important;
   }
+  
+  body.printing-receipt #buku-bantu-container {
+    display: none !important;
+  }
+  
+  body.printing-ai * {
+    visibility: hidden;
+  }
+  body.printing-ai #ai-analysis-content, body.printing-ai #ai-analysis-content * {
+    visibility: visible;
+  }
+  body.printing-ai #ai-analysis-content {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    color: black !important;
+    background-color: white !important;
+  }
+  body.printing-ai #ai-analysis-content h1, 
+  body.printing-ai #ai-analysis-content h2, 
+  body.printing-ai #ai-analysis-content h3, 
+  body.printing-ai #ai-analysis-content p, 
+  body.printing-ai #ai-analysis-content li, 
+  body.printing-ai #ai-analysis-content span, 
+  body.printing-ai #ai-analysis-content strong {
+    color: black !important;
+  }
+  body.printing-ai #ai-analysis-content .text-red-500 {
+    color: red !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+  tr, .break-inside-avoid {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+  thead {
+    display: table-header-group;
+  }
+  tfoot {
+    display: table-footer-group;
+  }
+}
+
+.col-uraian {
+  max-width: 300px;
+  white-space: normal !important;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
 }

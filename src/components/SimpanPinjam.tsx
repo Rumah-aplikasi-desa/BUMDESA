@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { CreditCard, Calculator, Sparkles, Loader2, Check, Plus, X, ArrowRight, Search, DollarSign, Calendar, FileText, Building } from 'lucide-react';
 import { Reference, Account, Transaction } from '../types';
-import { formatCurrency, cn } from '../lib/utils';
+import { formatCurrency, cn, formatDate } from '../lib/utils';
 import { parseTransactionWithAI } from '../services/geminiService';
 import { TRANSACTION_CATEGORIES, CASH_FLOW_CATEGORIES } from '../constants';
 import { sheetsService } from '../services/sheetsService';
@@ -150,10 +150,11 @@ export const SimpanPinjam: React.FC<SimpanPinjamProps> = ({ references, accounts
           setIsCashFlowModalOpen(true);
         }
       } else {
+        console.error('AI Parse failed: parseTransactionWithAI returned null');
         alert('Maaf, AI gagal memproses perintah Anda.');
       }
     } catch (error) {
-      console.error('AI Error:', error);
+      console.error('AI Error in handleAiParse:', error);
       alert('Terjadi kesalahan saat menghubungi AI.');
     } finally {
       setIsAiLoading(false);
@@ -344,6 +345,27 @@ export const SimpanPinjam: React.FC<SimpanPinjamProps> = ({ references, accounts
           </button>
         )}
       </div>
+
+      {/* AI Loading Overlay */}
+      <AnimatePresence>
+        {isAiLoading && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              className="relative bg-white p-8 rounded-3xl shadow-2xl flex flex-col items-center gap-4 max-w-xs w-full text-center"
+            >
+              <div className="w-16 h-16 bg-emerald-50 text-emerald-500 rounded-full flex items-center justify-center mb-2">
+                <Loader2 className="animate-spin" size={32} />
+              </div>
+              <h3 className="text-lg font-bold text-slate-800">Menganalisis dengan AI</h3>
+              <p className="text-sm text-slate-500">Mohon tunggu sebentar, AI sedang memproses deskripsi transaksi Anda...</p>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {isFormVisible && (
@@ -652,7 +674,7 @@ export const SimpanPinjam: React.FC<SimpanPinjamProps> = ({ references, accounts
                 filteredTransactions.map((t, index) => (
                   <tr key={t.id} className="hover:bg-slate-50/50 transition-colors">
                     <td className="px-6 py-4 text-sm text-slate-600">{index + 1}</td>
-                    <td className="px-6 py-4 text-sm text-slate-600 whitespace-nowrap">{t.date}</td>
+                    <td className="px-6 py-4 text-sm text-slate-600 whitespace-nowrap">{formatDate(t.date)}</td>
                     <td className="px-6 py-4 text-sm text-slate-900 font-medium">
                       {t.details?.nasabah || '-'}
                     </td>

@@ -18,12 +18,12 @@ import {
   FileImage,
   FileCode
 } from 'lucide-react';
-import { cn, formatCurrency, terbilang } from '../lib/utils';
+import { cn, formatCurrency, terbilang, formatDate } from '../lib/utils';
+import { jsPDF } from 'jspdf';
+import html2canvas from 'html2canvas';
 import * as XLSX from 'xlsx';
 import { motion, AnimatePresence } from 'motion/react';
 import { DataUmum } from '../types';
-import { jsPDF } from 'jspdf';
-import html2canvas from 'html2canvas';
 import { PrintModal } from './PrintModal';
 
 interface BukuBantuProps {
@@ -89,71 +89,37 @@ export const BukuBantu: React.FC<BukuBantuProps> = ({ type, references, transact
 
   const confirmPrint = () => {
     setIsPrintModalOpen(false);
+    document.body.classList.add('printing-receipt');
     setTimeout(() => {
       window.focus();
       window.print();
+      setTimeout(() => {
+        document.body.classList.remove('printing-receipt');
+      }, 500);
     }, 500);
   };
 
   const exportPDF = async () => {
-    if (!receiptRef.current) return;
-    setIsExportingPDF(true);
+    const element = document.getElementById('buku-bantu-container');
+    if (!element) return;
+
+    // Add pdf-export class for oklch override
+    element.classList.add('pdf-export');
+
+    const pdf = new jsPDF('p', 'mm', 'a4');
     
-    const buttons = document.getElementById('export-buttons');
-    if (buttons) buttons.style.display = 'none';
+    await pdf.html(element, {
+      callback: function (doc) {
+        doc.save(`${getTitle()}_${currentDataUmum.namaBumdesa}.pdf`);
+      },
+      x: 10,
+      y: 10,
+      width: 190, // A4 portrait width - margins
+      windowWidth: element.scrollWidth,
+      autoPaging: 'text'
+    });
     
-    try {
-      const canvas = await html2canvas(receiptRef.current, { 
-        useCORS: true,
-        scale: 2,
-        backgroundColor: '#ffffff',
-        logging: true,
-        onclone: (clonedDoc) => {
-          const elements = clonedDoc.querySelectorAll('*');
-          elements.forEach(el => {
-            const style = clonedDoc.defaultView?.getComputedStyle(el);
-            if (style) {
-              if (style.color.includes('oklch')) {
-                (el as HTMLElement).style.color = 'black';
-              }
-              if (style.backgroundColor.includes('oklch')) {
-                (el as HTMLElement).style.backgroundColor = 'white';
-              }
-              if (style.borderColor.includes('oklch')) {
-                (el as HTMLElement).style.borderColor = 'black';
-              }
-            }
-          });
-        }
-      });
-      const imgData = canvas.toDataURL('image/png');
-      const pdf = new jsPDF('p', 'mm', 'a4');
-      const imgProps = pdf.getImageProperties(imgData);
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
-      const pageHeight = pdf.internal.pageSize.getHeight();
-      
-      let heightLeft = pdfHeight;
-      let position = 0;
-      
-      pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, pdfHeight);
-      heightLeft -= pageHeight;
-      
-      while (heightLeft > 0) {
-        position -= pageHeight;
-        pdf.addPage();
-        pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, pdfHeight);
-        heightLeft -= pageHeight;
-      }
-      
-      pdf.save(`Kuitansi_${selectedTransaction.evidenceNo}.pdf`);
-    } catch (error) {
-      console.error('PDF Export Error:', error);
-      alert('Gagal mengekspor PDF. Silakan coba lagi.');
-    } finally {
-      if (buttons) buttons.style.display = '';
-      setIsExportingPDF(false);
-    }
+    element.classList.remove('pdf-export');
   };
 
   const exportExcelMain = () => {
@@ -166,72 +132,24 @@ export const BukuBantu: React.FC<BukuBantuProps> = ({ type, references, transact
   const exportPDFMain = async () => {
     const element = document.getElementById('buku-bantu-container');
     if (!element) return;
-    setIsExportingPDFMain(true);
+
+    // Add pdf-export class for oklch override
+    element.classList.add('pdf-export');
+
+    const pdf = new jsPDF('p', 'mm', 'a4');
     
-    // Temporarily hide buttons for PDF capture
-    const buttons = document.querySelectorAll('.no-print');
-    buttons.forEach(b => (b as HTMLElement).style.display = 'none');
+    await pdf.html(element, {
+      callback: function (doc) {
+        doc.save(`${getTitle()}_${currentDataUmum.namaBumdesa}.pdf`);
+      },
+      x: 10,
+      y: 10,
+      width: 190, // A4 portrait width - margins
+      windowWidth: element.scrollWidth,
+      autoPaging: 'text'
+    });
     
-    try {
-      const canvas = await html2canvas(element, { 
-        useCORS: true,
-        scale: 1.5,
-        backgroundColor: '#ffffff',
-        onclone: (clonedDoc) => {
-          const elements = clonedDoc.querySelectorAll('*');
-          elements.forEach(el => {
-            const style = clonedDoc.defaultView?.getComputedStyle(el);
-            if (style) {
-              if (style.color.includes('oklch')) {
-                (el as HTMLElement).style.color = 'black';
-              }
-              if (style.backgroundColor.includes('oklch')) {
-                (el as HTMLElement).style.backgroundColor = 'white';
-              }
-              if (style.borderColor.includes('oklch')) {
-                (el as HTMLElement).style.borderColor = 'black';
-              }
-            }
-          });
-        },
-        ignoreElements: (node) => {
-          if (node.tagName === 'IMG') {
-            const img = node as HTMLImageElement;
-            if (img.src && !img.src.startsWith('data:') && new URL(img.src).origin !== window.location.origin) {
-              return true;
-            }
-          }
-          return false;
-        }
-      });
-      const imgData = canvas.toDataURL('image/png');
-      const pdf = new jsPDF('p', 'mm', 'a4');
-      const imgProps = pdf.getImageProperties(imgData);
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
-      const pageHeight = pdf.internal.pageSize.getHeight();
-      
-      let heightLeft = pdfHeight;
-      let position = 0;
-      
-      pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, pdfHeight);
-      heightLeft -= pageHeight;
-      
-      while (heightLeft > 0) {
-        position -= pageHeight;
-        pdf.addPage();
-        pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, pdfHeight);
-        heightLeft -= pageHeight;
-      }
-      
-      pdf.save(`${getTitle()}_${currentDataUmum.namaBumdesa}.pdf`);
-    } catch (error) {
-      console.error('PDF Export Error:', error);
-      window.print();
-    } finally {
-      buttons.forEach(b => (b as HTMLElement).style.display = '');
-      setIsExportingPDFMain(false);
-    }
+    element.classList.remove('pdf-export');
   };
 
   const exportWordMain = () => {
@@ -604,7 +522,8 @@ export const BukuBantu: React.FC<BukuBantuProps> = ({ type, references, transact
       <PrintModal 
         isOpen={isTablePrintModalOpen} 
         onClose={() => setIsTablePrintModalOpen(false)} 
-        onPrint={() => { setIsTablePrintModalOpen(false); window.focus(); window.print(); }} 
+        onPrint={() => { setIsTablePrintModalOpen(false); window.print(); }} 
+        onPreview={() => { setIsTablePrintModalOpen(false); window.print(); }}
         title="Cetak Laporan"
       />
 
@@ -694,7 +613,8 @@ export const BukuBantu: React.FC<BukuBantuProps> = ({ type, references, transact
                   {getTableHeaders().map((header, idx) => (
                     <th key={idx} className={cn(
                       "px-8 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider",
-                      (header === 'Saldo Akhir' || header === 'Nilai') && "text-right"
+                      (header === 'Saldo Akhir' || header === 'Nilai') && "text-right",
+                      header === 'Uraian' && "col-uraian"
                     )}>
                       {header}
                     </th>
@@ -721,10 +641,10 @@ export const BukuBantu: React.FC<BukuBantuProps> = ({ type, references, transact
                       items = bumdesReferences.filter(r => r.type === 'Aset');
                       break;
                     case 'bb-invoice':
-                      items = bumdesTransactions.filter(t => t.type === 'Invoice');
+                      items = bumdesTransactions.filter(t => t.type === 'Invoice' || t.type === 'Piutang');
                       break;
                     case 'bb-nota-pesan':
-                      items = bumdesTransactions.filter(t => t.type === 'NotaPesan');
+                      items = bumdesTransactions.filter(t => t.type === 'NotaPesan' || t.type === 'Hutang');
                       break;
                   }
 
@@ -753,10 +673,10 @@ export const BukuBantu: React.FC<BukuBantuProps> = ({ type, references, transact
                           <td className="px-8 py-4 text-sm text-slate-600">{idx + 1}</td>
                           {isDocs ? (
                             <>
-                              <td className="px-8 py-4 text-sm text-slate-600">{item.date}</td>
+                              <td className="px-8 py-4 text-sm text-slate-600">{formatDate(item.date)}</td>
                               <td className="px-8 py-4 text-sm text-slate-900 font-medium">{item.evidenceNo}</td>
                               <td className="px-8 py-4 text-sm text-slate-600">{item.details?.to || '-'}</td>
-                              <td className="px-8 py-4 text-sm text-slate-600">{item.description}</td>
+                              <td className="px-8 py-4 text-sm text-slate-600 col-uraian">{item.description}</td>
                               <td className="px-8 py-4 text-sm text-slate-900 font-bold text-right">{formatCurrency(item.value || 0)}</td>
                               <td className="px-8 py-4 text-sm text-slate-600">
                                 <span className={cn("px-2 py-1 rounded-full text-[10px] font-bold", item.status === 'Lunas' ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700")}>
@@ -786,7 +706,7 @@ export const BukuBantu: React.FC<BukuBantuProps> = ({ type, references, transact
       )}
 
       {/* Signature Section */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-8 md:gap-12 mt-8 md:mt-12 hidden print:grid">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-8 md:gap-12 mt-8 md:mt-12 hidden print:grid break-inside-avoid">
         <div className="hidden sm:flex flex-col items-center">
           {/* Empty for now or for other roles */}
         </div>

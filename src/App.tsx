@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Layout } from './components/Layout';
 import { Login } from './components/Login';
 import { Dashboard } from './components/Dashboard';
@@ -61,15 +61,16 @@ export default function App() {
   };
 
   // Sync Data
+  const isRefreshing = useRef(false);
   const refreshData = async () => {
-    if (!isLoggedIn) return;
+    if (!isLoggedIn || isRefreshing.current) return;
+    isRefreshing.current = true;
     try {
-      const [sheetDataUmum, sheetAccounts, sheetReferences, sheetTransactions] = await Promise.all([
-        sheetsService.get('DataUmum'),
-        sheetsService.get('Accounts'),
-        sheetsService.get('References'),
-        sheetsService.get('Transactions')
-      ]);
+      const batchData = await sheetsService.getBatch();
+      const sheetDataUmum = batchData.DataUmum || [];
+      const sheetAccounts = batchData.Accounts || [];
+      const sheetReferences = batchData.References || [];
+      const sheetTransactions = batchData.Transactions || [];
 
       if (sheetDataUmum.length > 0) {
         setAllDataUmum(sheetDataUmum.map(d => ({
@@ -153,14 +154,16 @@ export default function App() {
       } as Transaction)));
     } catch (error) {
       console.error('Error fetching sheet data:', error);
+    } finally {
+      isRefreshing.current = false;
     }
   };
 
   useEffect(() => {
     if (isLoggedIn) {
       refreshData();
-      // Poll every 30 seconds for "real-time" feel
-      const interval = setInterval(refreshData, 30000);
+      // Poll every 60 seconds for "real-time" feel
+      const interval = setInterval(refreshData, 60000);
       return () => clearInterval(interval);
     }
   }, [isLoggedIn]);
@@ -199,7 +202,7 @@ export default function App() {
   }
 
   const renderContent = () => {
-    if (activeTab === 'dashboard') return <Dashboard />;
+    if (activeTab === 'dashboard') return <Dashboard userRole={user?.role || 'User'} allDataUmum={allDataUmum} />;
     if (activeTab === 'dataUmum') return <DataUmumForm onUpdate={refreshData} />;
     if (activeTab === 'coa') return <COA currentUser={user} />;
     if (activeTab.startsWith('ref-')) return <Referensi activeSubTab={activeTab} onRefresh={refreshData} />;

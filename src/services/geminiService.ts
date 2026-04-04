@@ -18,9 +18,26 @@ export interface ParsedTransaction {
   loanType?: string;
 }
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const getApiKey = () => {
+  // The API key is automatically injected by the platform into process.env.GEMINI_API_KEY
+  const key = process.env.GEMINI_API_KEY;
+  
+  if (!key || key === 'undefined' || key === 'MY_GEMINI_API_KEY' || key.trim() === '' || key.length < 10) {
+    console.warn("GEMINI_API_KEY is missing or invalid. Please ensure you have set your Gemini API Key in the Secrets menu of AI Studio.");
+    return null;
+  }
+  return key;
+};
 
 export async function parseTransactionWithAI(prompt: string, accounts: any[]): Promise<ParsedTransaction | null> {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    console.error("AI Error: GEMINI_API_KEY is missing.");
+    return null;
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
+
   try {
     const accountList = accounts.map(a => `${a.code}: ${a.name}`).join('\n');
     const categories = TRANSACTION_CATEGORIES.join(', ');
@@ -77,20 +94,37 @@ export async function parseTransactionWithAI(prompt: string, accounts: any[]): P
 }
 
 export async function analyzeFinancialHealth(transactions: any[], accounts: any[]): Promise<string | null> {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    console.error("AI Error: GEMINI_API_KEY is missing.");
+    return null;
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
+
   try {
     const prompt = `
-      Anda adalah konsultan keuangan ahli untuk BUM Desa. Analisis data keuangan berikut dan berikan laporan detail mengenai:
-      1. HASIL PENILAIAN TINGKAT KESEHATAN BUM DESA ASPEK KEUANGAN.
-      2. Analisis Laba-rugi.
-      3. Analisis Pendapatan Vs Beban.
-      4. Analisis Neraca.
-      5. Berikan saran dan kritik yang membangun secara detail.
+      Anda adalah Konsultan Keuangan Senior spesialis BUM Desa (Badan Usaha Milik Desa). 
+      Tugas Anda adalah memberikan Analisis Kesehatan Keuangan yang komprehensif, mendalam, dan profesional berdasarkan data yang diberikan.
 
-      Gunakan bahasa Indonesia yang profesional namun mudah dimengerti.
+      STRUKTUR LAPORAN YANG WAJIB DIIKUTI:
+      1. RINGKASAN EKSEKUTIF: Gambaran umum kondisi keuangan saat ini.
+      2. HASIL PENILAIAN TINGKAT KESEHATAN (Skor 1-100): Berikan penilaian berdasarkan rasio likuiditas, solvabilitas, dan rentabilitas.
+      3. ANALISIS LABA-RUGI: Analisis mendalam tentang efisiensi operasional dan profitabilitas.
+      4. ANALISIS PENDAPATAN VS BEBAN: Identifikasi tren dan anomali dalam pengeluaran.
+      5. ANALISIS NERACA: Evaluasi struktur aset, kewajiban, dan ekuitas.
+      6. REKOMENDASI STRATEGIS: Berikan minimal 3 langkah konkret untuk meningkatkan performa keuangan.
+      7. KRITIK MEMBANGUN: Sampaikan kelemahan yang ditemukan dalam pencatatan atau manajemen keuangan.
 
-      Data:
-      - Transaksi: ${JSON.stringify(transactions.slice(0, 100))} // Limit to avoid payload size issues
-      - Akun: ${JSON.stringify(accounts)}
+      PENTING:
+      - Jika ada saran kesalahan, peringatan, atau wawasan yang sangat penting dan mendesak, Anda WAJIB mengapit teks tersebut dengan tag [MERAH] dan [/MERAH]. Contoh: [MERAH]Segera kurangi beban operasional yang membengkak![/MERAH]
+      - Gunakan format Markdown standar untuk heading (##), list (-), dan bold (**).
+      - Jangan biarkan bagian manapun kosong. Jika data tidak cukup, berikan asumsi atau saran umum.
+      - Gunakan bahasa Indonesia yang formal, tajam, namun tetap memberikan motivasi bagi pengelola BUM Desa.
+
+      DATA UNTUK DIANALISIS:
+      - Daftar Transaksi (100 terakhir): ${JSON.stringify(transactions.slice(0, 100))}
+      - Daftar Akun & Saldo: ${JSON.stringify(accounts)}
     `;
 
     const response = await ai.models.generateContent({
