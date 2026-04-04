@@ -1,3 +1,5 @@
+import { FinancialAnalysisPayload } from '../lib/financialAnalysis';
+
 export interface ParsedTransaction {
   date: string;
   evidenceNo: string;
@@ -44,12 +46,12 @@ export async function parseTransactionWithAI(prompt: string, accounts: any[]): P
   }
 }
 
-export async function analyzeFinancialHealth(transactions: any[], accounts: any[]): Promise<string | null> {
+export async function analyzeFinancialHealth(summary: FinancialAnalysisPayload): Promise<string | null> {
   try {
     const response = await fetch('/api/ai/analyze-financial-health', {
       method: 'POST',
       headers: getHeaders(),
-      body: JSON.stringify({ transactions, accounts }),
+      body: JSON.stringify({ summary }),
     });
 
     if (!response.ok) {

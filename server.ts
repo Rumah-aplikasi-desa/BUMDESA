@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
+import { createHash } from 'crypto';
 import { fileURLToPath } from 'url';
 import { google } from 'googleapis';
 import { JWT } from 'google-auth-library';
@@ -11,6 +12,7 @@ import dotenv from 'dotenv';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { TRANSACTION_CATEGORIES, CASH_FLOW_CATEGORIES } from './src/constants';
+import { buildFinancialAnalysisPayload, FinancialAnalysisPayload } from './src/lib/financialAnalysis';
 
 dotenv.config({ path: '.env.local' });
 dotenv.config();
@@ -150,13 +152,44 @@ Return ONLY valid JSON format with fields: date (YYYY-MM-DD), evidenceNo, descri
   }
 }
 
-async function analyzeFinancialHealthWithAI(transactions: any[], accounts: any[]) {
+const AI_ANALYSIS_CACHE_TTL = 5 * 60 * 1000;
+const aiAnalysisCache: Record<string, { data: string; timestamp: number }> = {};
+
+function getCachedAnalysis(key: string) {
+  const cached = aiAnalysisCache[key];
+  if (cached && Date.now() - cached.timestamp < AI_ANALYSIS_CACHE_TTL) {
+    return cached.data;
+  }
+
+  return null;
+}
+
+function setCachedAnalysis(key: string, data: string) {
+  aiAnalysisCache[key] = {
+    data,
+    timestamp: Date.now(),
+  };
+}
+
+function getFinancialAnalysisCacheKey(summary: FinancialAnalysisPayload) {
+  return createHash('sha1')
+    .update(`${GEMINI_MODEL}:${JSON.stringify(summary)}`)
+    .digest('hex');
+}
+
+async function analyzeFinancialHealthWithAI(summary: FinancialAnalysisPayload) {
   const ai = getGeminiClient();
   if (!ai) return null;
 
+  const cacheKey = getFinancialAnalysisCacheKey(summary);
+  const cachedAnalysis = getCachedAnalysis(cacheKey);
+  if (cachedAnalysis) {
+    return cachedAnalysis;
+  }
+
   const prompt = `
 Anda adalah Konsultan Keuangan Senior spesialis BUM Desa (Badan Usaha Milik Desa).
-Tugas Anda adalah memberikan Analisis Kesehatan Keuangan yang komprehensif, mendalam, dan profesional berdasarkan data yang diberikan.
+Tugas Anda adalah memberikan Analisis Kesehatan Keuangan yang tajam, ringkas, dan profesional berdasarkan ringkasan data yang diberikan.
 
 STRUKTUR LAPORAN YANG WAJIB DIIKUTI:
 1. RINGKASAN EKSEKUTIF: Gambaran umum kondisi keuangan saat ini.
@@ -172,10 +205,11 @@ PENTING:
 - Gunakan format Markdown standar untuk heading (##), list (-), dan bold (**).
 - Jangan biarkan bagian manapun kosong. Jika data tidak cukup, berikan asumsi atau saran umum.
 - Gunakan bahasa Indonesia yang formal, tajam, namun tetap memberikan motivasi bagi pengelola BUM Desa.
+- Maksimalkan kejelasan dan kecepatan baca. Batasi jawaban sekitar 450-650 kata.
+- Jangan mengulang data mentah satu per satu. Fokus pada pola, rasio sederhana, risiko, dan tindakan.
 
 DATA UNTUK DIANALISIS:
-- Daftar Transaksi (100 terakhir): ${JSON.stringify(transactions.slice(0, 100))}
-- Daftar Akun & Saldo: ${JSON.stringify(accounts)}
+- Ringkasan Data Keuangan: ${JSON.stringify(summary)}
 `;
 
   try {
@@ -184,7 +218,12 @@ DATA UNTUK DIANALISIS:
       contents: prompt,
     });
 
-    return response.text || null;
+    const analysis = response.text || null;
+    if (analysis) {
+      setCachedAnalysis(cacheKey, analysis);
+    }
+
+    return analysis;
   } catch (error) {
     console.error('AI Analysis Error:', error);
     return null;
@@ -197,6 +236,7 @@ const SHEETS_CONFIG = {
   Transactions: ['Id', 'Date', 'EvidenceNo', 'Description', 'Amount', 'Type', 'CashFlowCategory', 'CashFlowSubCategory', 'CashFlowItem', 'Details', 'JournalEntries', 'UserId', 'UnitId'],
   References: ['Id', 'Name', 'Tipe', 'Detail', 'UserId'],
   Users: ['Id', 'Username', 'Password', 'Email', 'Role', 'CreatedAt'],
+  AnnualReports: ['Id', 'Year', 'Title', 'Payload', 'UserId'],
 };
 
 // Helper for Google API rate limiting (429)
@@ -559,17 +599,18 @@ app.post('/api/ai/parse-transaction', authenticateToken, async (req, res) => {
 });
 
 app.post('/api/ai/analyze-financial-health', authenticateToken, async (req, res) => {
-  const { transactions, accounts } = req.body;
+  const { summary, transactions, accounts } = req.body;
 
-  if (!Array.isArray(transactions) || !Array.isArray(accounts)) {
-    return res.status(400).json({ error: 'Transactions and accounts are required' });
+  if (!summary && (!Array.isArray(transactions) || !Array.isArray(accounts))) {
+    return res.status(400).json({ error: 'Summary atau kombinasi transactions dan accounts wajib dikirim.' });
   }
 
   if (!getGeminiApiKey()) {
     return res.status(500).json({ error: 'GEMINI_API_KEY belum dikonfigurasi di server.' });
   }
 
-  const analysis = await analyzeFinancialHealthWithAI(transactions, accounts);
+  const summaryPayload: FinancialAnalysisPayload = summary || buildFinancialAnalysisPayload(transactions, accounts);
+  const analysis = await analyzeFinancialHealthWithAI(summaryPayload);
   if (!analysis) {
     return res.status(502).json({ error: 'AI gagal membuat analisis keuangan.' });
   }

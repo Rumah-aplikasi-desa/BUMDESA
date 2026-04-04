@@ -55,6 +55,29 @@
     size: landscape;
     margin: 10mm;
   }
+
+  html,
+  body,
+  #root,
+  main,
+  section,
+  article {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  .h-screen,
+  .min-h-screen,
+  .flex-1,
+  .overflow-hidden,
+  .overflow-x-auto,
+  .overflow-y-auto {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
   body * {
     visibility: hidden;
   }

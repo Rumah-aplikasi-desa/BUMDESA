@@ -14,12 +14,11 @@ import {
   FileCode
 } from 'lucide-react';
 import { cn, formatCurrency, formatDate } from '../lib/utils';
-import { jsPDF } from 'jspdf';
-import html2canvas from 'html2canvas';
 import * as XLSX from 'xlsx';
 import { motion } from 'motion/react';
 import { Account, Reference, Transaction } from '../types';
 import { PrintModal } from './PrintModal';
+import { exportElementToPdf, openElementPrintPreview } from '../lib/documentExport';
 
 interface LaporanProps {
   type: string;
@@ -225,29 +224,17 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
     const element = document.getElementById('report-container');
     if (!element) return;
 
-    // Temporarily hide elements that shouldn't be in PDF
-    const noPrintElements = element.querySelectorAll('.no-print');
-    noPrintElements.forEach(el => (el as HTMLElement).style.display = 'none');
+    setIsExportingPDF(true);
 
-    // Add pdf-export class for oklch override
-    element.classList.add('pdf-export');
-
-    const pdf = new jsPDF('l', 'mm', 'a4');
-    
-    await pdf.html(element, {
-      callback: function (doc) {
-        doc.save(`${getReportTitle()}_${currentDataUmum.namaBumdesa}_${filterMonth}_${filterYear}.pdf`);
-      },
-      x: 10,
-      y: 10,
-      width: 277, // A4 landscape width - margins
-      windowWidth: element.scrollWidth,
-      autoPaging: 'text'
-    });
-
-    // Restore hidden elements
-    noPrintElements.forEach(el => (el as HTMLElement).style.display = '');
-    element.classList.remove('pdf-export');
+    try {
+      await exportElementToPdf({
+        element,
+        filename: `${getReportTitle()}_${currentDataUmum.namaBumdesa}_${filterMonth}_${filterYear}.pdf`,
+        orientation: 'landscape',
+      });
+    } finally {
+      setIsExportingPDF(false);
+    }
   };
 
   const handleExportDoc = () => {
@@ -270,6 +257,17 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
+  };
+
+  const handlePrintReport = () => {
+    const element = document.getElementById('report-container');
+    if (!element) return;
+
+    openElementPrintPreview({
+      element,
+      title: `${getReportTitle()} - ${currentDataUmum.namaBumdesa || 'BUMDesa'}`,
+      orientation: 'landscape',
+    });
   };
 
   const getReportTitle = () => {
@@ -1513,8 +1511,14 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
       <PrintModal 
         isOpen={isPrintModalOpen} 
         onClose={() => setIsPrintModalOpen(false)} 
-        onPrint={() => { setIsPrintModalOpen(false); window.print(); }} 
-        onPreview={() => { setIsPrintModalOpen(false); window.print(); }}
+        onPrint={() => {
+          setIsPrintModalOpen(false);
+          handlePrintReport();
+        }} 
+        onPreview={() => {
+          setIsPrintModalOpen(false);
+          handlePrintReport();
+        }}
         title="Cetak Laporan"
       />
 

@@ -21,8 +21,6 @@ import {
   Download,
   FileText
 } from 'lucide-react';
-import { jsPDF } from 'jspdf';
-import html2canvas from 'html2canvas';
 import { 
   AreaChart, 
   Area, 
@@ -44,6 +42,8 @@ import { Transaction, Account, DataUmum } from '../types';
 import { analyzeFinancialHealth } from '../services/geminiService';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { buildFinancialAnalysisPayload } from '../lib/financialAnalysis';
+import { exportElementToPdf } from '../lib/documentExport';
 
 const COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
 
@@ -143,21 +143,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
     return { revenue, expense, profit: revenue - expense, assets };
   }, [filteredTransactions, filteredAccounts]);
 
+  const analysisPayload = useMemo(
+    () => buildFinancialAnalysisPayload(filteredTransactions, filteredAccounts),
+    [filteredTransactions, filteredAccounts],
+  );
+
   const handleAiAnalysis = async () => {
     if (isAnalyzing) return;
     setIsAnalyzing(true);
-    setAiAnalysis(null); // Reset analysis
     try {
-      // Use filtered transactions
-      const dataToAnalyze = filteredTransactions;
-      const accountsToAnalyze = filteredAccounts;
-
-      if (dataToAnalyze.length === 0) {
+      if (filteredTransactions.length === 0) {
         setAiAnalysis('Maaf, AI tidak dapat memberikan analisis saat ini. Pastikan data transaksi tersedia untuk tahun yang dipilih.');
         return;
       }
 
-      const analysis = await analyzeFinancialHealth(dataToAnalyze, accountsToAnalyze);
+      const analysis = await analyzeFinancialHealth(analysisPayload);
       if (analysis) {
         setAiAnalysis(analysis);
       } else {
@@ -217,23 +217,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
     const element = document.getElementById('ai-analysis-content');
     if (!element) return;
 
-    // Add pdf-export class for oklch override
-    element.classList.add('pdf-export');
-
-    const pdf = new jsPDF('p', 'mm', 'a4');
-    
-    await pdf.html(element, {
-      callback: function (doc) {
-        doc.save('Wawasan_AI_BUMDesa.pdf');
-      },
-      x: 10,
-      y: 10,
-      width: 190, // A4 portrait width - margins
-      windowWidth: element.scrollWidth,
-      autoPaging: 'text'
+    await exportElementToPdf({
+      element,
+      filename: 'Wawasan_AI_BUMDesa.pdf',
+      orientation: 'portrait',
     });
-
-    element.classList.remove('pdf-export');
   };
 
   const exportAIDOC = () => {
