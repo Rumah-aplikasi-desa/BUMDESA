@@ -4,6 +4,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { google } from 'googleapis';
 import { JWT } from 'google-auth-library';
+import { BigQuery } from '@google-cloud/bigquery';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import bcrypt from 'bcryptjs';
@@ -38,12 +39,33 @@ async function getSheetsClient() {
     const auth = new JWT({
       email: key.client_email,
       key: key.private_key,
-      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+      scopes: ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/bigquery'],
     });
     sheets = google.sheets({ version: 'v4', auth });
     return sheets;
   } catch (error) {
     console.error('Error initializing Google Sheets client:', error);
+    return null;
+  }
+}
+
+async function getBigQueryClient() {
+  try {
+    const SERVICE_ACCOUNT_KEY = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
+    if (!SERVICE_ACCOUNT_KEY) return null;
+    const key = JSON.parse(SERVICE_ACCOUNT_KEY);
+    
+    const bigquery = new BigQuery({
+      projectId: key.project_id,
+      credentials: {
+        client_email: key.client_email,
+        private_key: key.private_key,
+      },
+    });
+    
+    return bigquery;
+  } catch (error) {
+    console.error('Error initializing BigQuery client:', error);
     return null;
   }
 }
@@ -59,6 +81,7 @@ const SHEETS_CONFIG = {
 async function initializeSpreadsheet() {
   const client = await getSheetsClient();
   if (!client) return;
+  const { sheets } = client;
 
   try {
     const spreadsheet = await client.spreadsheets.get({
@@ -339,6 +362,20 @@ app.get('/api/sheets/:sheetName', authenticateToken, async (req, res) => {
     }
 
     res.json(filteredData);
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+app.post('/api/bigquery/query', authenticateToken, async (req, res) => {
+  const { query } = req.body;
+  const bigquery = await getBigQueryClient();
+  if (!bigquery) {
+    return res.status(500).json({ error: 'BigQuery API belum dikonfigurasi.' });
+  }
+  try {
+    const [rows] = await bigquery.query(query);
+    res.json(rows);
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });
   }
