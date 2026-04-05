@@ -24,6 +24,7 @@ import { cn, formatCurrency } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 import { sheetsService } from '../services/sheetsService';
 import { TRANSACTION_CATEGORIES, CASH_FLOW_CATEGORIES } from '../constants';
+import { AccountSearchSelect } from './AccountSearchSelect';
 
 interface TransaksiProps {
   accounts: Account[];
@@ -687,75 +688,41 @@ export const Transaksi: React.FC<TransaksiProps> = ({ accounts, references }) =>
                 {formData.type === 'Saldo Awal' ? (
                   <div className="space-y-2">
                     <label className="text-sm font-bold text-slate-700">Pilih Akun</label>
-                    <select 
-                      value={formData.debitAccountId || formData.creditAccountId}
-                      onChange={(e) => {
-                        const selectedAcc = accounts.find(a => a.id === e.target.value);
-                        if (selectedAcc) {
-                          if (selectedAcc.normalBalance === 'Debit') {
-                            setFormData({...formData, debitAccountId: selectedAcc.id, creditAccountId: ''});
-                          } else {
-                            setFormData({...formData, debitAccountId: '', creditAccountId: selectedAcc.id});
-                          }
+                    <AccountSearchSelect
+                      accounts={accounts}
+                      value={formData.debitAccountId || formData.creditAccountId || ''}
+                      onChange={(accountId) => {
+                        const selectedAcc = accounts.find(account => account.id === accountId);
+                        if (!selectedAcc) {
+                          setFormData({ ...formData, debitAccountId: '', creditAccountId: '' });
+                          return;
+                        }
+
+                        if (selectedAcc.normalBalance === 'Debit') {
+                          setFormData({ ...formData, debitAccountId: selectedAcc.id, creditAccountId: '' });
                         } else {
-                          setFormData({...formData, debitAccountId: '', creditAccountId: ''});
+                          setFormData({ ...formData, debitAccountId: '', creditAccountId: selectedAcc.id });
                         }
                       }}
-                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm"
-                    >
-                      <option value="">Pilih Akun...</option>
-                      {accounts.filter(acc => !acc.code.endsWith('.00')).map(acc => (
-                        <option key={acc.id} value={acc.id}>{acc.code} - {acc.name} (Saldo Normal: {acc.normalBalance})</option>
-                      ))}
-                    </select>
+                    />
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 md:gap-6">
                     <div className="space-y-2">
                       <label className="text-sm font-bold text-slate-700">Akun Debit</label>
-                      <input 
-                        list="debit-accounts"
-                        value={
-                          accounts.find(a => a.id === formData.debitAccountId) 
-                            ? `${accounts.find(a => a.id === formData.debitAccountId)?.code} - ${accounts.find(a => a.id === formData.debitAccountId)?.name}` 
-                            : (formData.debitAccountId || '')
-                        }
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          const selectedAcc = accounts.find(a => `${a.code} - ${a.name}` === val);
-                          setFormData({...formData, debitAccountId: selectedAcc?.id || val});
-                        }}
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm"
-                        placeholder="Ketik kode atau nama akun..."
+                      <AccountSearchSelect
+                        accounts={accounts}
+                        value={formData.debitAccountId || ''}
+                        onChange={(accountId) => setFormData({ ...formData, debitAccountId: accountId })}
                       />
-                      <datalist id="debit-accounts">
-                        {accounts.filter(acc => !acc.code.endsWith('.00')).map(acc => (
-                          <option key={acc.id} value={`${acc.code} - ${acc.name}`} />
-                        ))}
-                      </datalist>
                     </div>
                     <div className="space-y-2">
                       <label className="text-sm font-bold text-slate-700">Akun Kredit</label>
-                      <input 
-                        list="credit-accounts"
-                        value={
-                          accounts.find(a => a.id === formData.creditAccountId) 
-                            ? `${accounts.find(a => a.id === formData.creditAccountId)?.code} - ${accounts.find(a => a.id === formData.creditAccountId)?.name}` 
-                            : (formData.creditAccountId || '')
-                        }
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          const selectedAcc = accounts.find(a => `${a.code} - ${a.name}` === val);
-                          setFormData({...formData, creditAccountId: selectedAcc?.id || val});
-                        }}
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm"
-                        placeholder="Ketik kode atau nama akun..."
+                      <AccountSearchSelect
+                        accounts={accounts}
+                        value={formData.creditAccountId || ''}
+                        onChange={(accountId) => setFormData({ ...formData, creditAccountId: accountId })}
                       />
-                      <datalist id="credit-accounts">
-                        {accounts.filter(acc => !acc.code.endsWith('.00')).map(acc => (
-                          <option key={acc.id} value={`${acc.code} - ${acc.name}`} />
-                        ))}
-                      </datalist>
                     </div>
                   </div>
                 )}

@@ -6,6 +6,7 @@ import { parseTransactionWithAI } from '../services/geminiService';
 import { TRANSACTION_CATEGORIES, CASH_FLOW_CATEGORIES } from '../constants';
 import { sheetsService } from '../services/sheetsService';
 import { motion, AnimatePresence } from 'motion/react';
+import { AccountSearchSelect } from './AccountSearchSelect';
 
 interface PengembalianAngsuranProps {
   references: Reference[];
@@ -481,25 +482,19 @@ export const PengembalianAngsuran: React.FC<PengembalianAngsuranProps> = ({ refe
 
                 <div className="space-y-2">
                   <label className="text-sm font-bold text-slate-700">Akun Debit</label>
-                  <select 
+                  <AccountSearchSelect
+                    accounts={accounts}
                     value={formData.debitAccountId}
-                    onChange={(e) => setFormData({...formData, debitAccountId: e.target.value})}
-                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm"
-                  >
-                    <option value="">Pilih Akun...</option>
-                    {accounts.filter(a => !a.code.endsWith('.00')).map(acc => <option key={acc.id} value={acc.id}>{acc.code} - {acc.name}</option>)}
-                  </select>
+                    onChange={(accountId) => setFormData({...formData, debitAccountId: accountId})}
+                  />
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-bold text-slate-700">Akun Kredit</label>
-                  <select 
+                  <AccountSearchSelect
+                    accounts={accounts}
                     value={formData.creditAccountId}
-                    onChange={(e) => setFormData({...formData, creditAccountId: e.target.value})}
-                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all text-sm"
-                  >
-                    <option value="">Pilih Akun...</option>
-                    {accounts.filter(a => !a.code.endsWith('.00')).map(acc => <option key={acc.id} value={acc.id}>{acc.code} - {acc.name}</option>)}
-                  </select>
+                    onChange={(accountId) => setFormData({...formData, creditAccountId: accountId})}
+                  />
                 </div>
               </div>
 
