@@ -19,12 +19,12 @@ import {
   FileCode
 } from 'lucide-react';
 import { cn, formatCurrency, terbilang, formatDate } from '../lib/utils';
-import { jsPDF } from 'jspdf';
-import html2canvas from 'html2canvas';
 import * as XLSX from 'xlsx';
 import { motion, AnimatePresence } from 'motion/react';
 import { DataUmum } from '../types';
 import { PrintModal } from './PrintModal';
+import { openElementPrintPreview } from '../lib/documentExport';
+import { PdfOrientationModal } from './PdfOrientationModal';
 
 interface BukuBantuProps {
   type: string;
@@ -80,8 +80,7 @@ export const BukuBantu: React.FC<BukuBantuProps> = ({ type, references, transact
     ? references.filter(r => r.userId === bumdesUserId || !r.userId)
     : references;
 
-  const [isExportingPDF, setIsExportingPDF] = useState(false);
-  const [isExportingPDFMain, setIsExportingPDFMain] = useState(false);
+  const [isPdfModalOpen, setIsPdfModalOpen] = useState(false);
 
   const handlePrint = () => {
     setIsPrintModalOpen(true);
@@ -99,27 +98,8 @@ export const BukuBantu: React.FC<BukuBantuProps> = ({ type, references, transact
     }, 500);
   };
 
-  const exportPDF = async () => {
-    const element = document.getElementById('buku-bantu-container');
-    if (!element) return;
-
-    // Add pdf-export class for oklch override
-    element.classList.add('pdf-export');
-
-    const pdf = new jsPDF('p', 'mm', 'a4');
-    
-    await pdf.html(element, {
-      callback: function (doc) {
-        doc.save(`${getTitle()}_${currentDataUmum.namaBumdesa}.pdf`);
-      },
-      x: 10,
-      y: 10,
-      width: 190, // A4 portrait width - margins
-      windowWidth: element.scrollWidth,
-      autoPaging: 'text'
-    });
-    
-    element.classList.remove('pdf-export');
+  const exportPDF = () => {
+    setIsPdfModalOpen(true);
   };
 
   const exportExcelMain = () => {
@@ -129,27 +109,19 @@ export const BukuBantu: React.FC<BukuBantuProps> = ({ type, references, transact
     XLSX.writeFile(wb, `${getTitle()}_${currentDataUmum.namaBumdesa}.xlsx`);
   };
 
-  const exportPDFMain = async () => {
+  const exportPDFMain = () => {
+    setIsPdfModalOpen(true);
+  };
+
+  const handlePdfOrientationSelect = (orientation: 'portrait' | 'landscape') => {
     const element = document.getElementById('buku-bantu-container');
     if (!element) return;
-
-    // Add pdf-export class for oklch override
-    element.classList.add('pdf-export');
-
-    const pdf = new jsPDF('p', 'mm', 'a4');
-    
-    await pdf.html(element, {
-      callback: function (doc) {
-        doc.save(`${getTitle()}_${currentDataUmum.namaBumdesa}.pdf`);
-      },
-      x: 10,
-      y: 10,
-      width: 190, // A4 portrait width - margins
-      windowWidth: element.scrollWidth,
-      autoPaging: 'text'
+    setIsPdfModalOpen(false);
+    openElementPrintPreview({
+      element,
+      title: `${getTitle()}_${currentDataUmum.namaBumdesa || 'BUMDesa'}`,
+      orientation,
     });
-    
-    element.classList.remove('pdf-export');
   };
 
   const exportWordMain = () => {
@@ -294,8 +266,8 @@ export const BukuBantu: React.FC<BukuBantuProps> = ({ type, references, transact
               <Printer size={14} />
               Cetak
             </button>
-            <button onClick={exportPDF} disabled={isExportingPDF} className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 text-white rounded-lg text-xs font-bold hover:bg-red-700 disabled:opacity-50" title="Export PDF">
-              {isExportingPDF ? <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <FileText size={14} />}
+            <button onClick={exportPDF} className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 text-white rounded-lg text-xs font-bold hover:bg-red-700" title="Export PDF">
+              <FileText size={14} />
               Download PDF
             </button>
           </div>
@@ -424,15 +396,10 @@ export const BukuBantu: React.FC<BukuBantuProps> = ({ type, references, transact
           </button>
           <button 
             onClick={exportPDFMain}
-            disabled={isExportingPDFMain}
-            className="flex items-center gap-2 px-4 py-2.5 text-sm font-bold text-red-600 bg-red-50 rounded-xl hover:bg-red-100 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex items-center gap-2 px-4 py-2.5 text-sm font-bold text-red-600 bg-red-50 rounded-xl hover:bg-red-100 transition-all"
           >
-            {isExportingPDFMain ? (
-              <div className="w-4 h-4 border-2 border-red-600/30 border-t-red-600 rounded-full animate-spin" />
-            ) : (
-              <FileText size={18} />
-            )}
-            {isExportingPDFMain ? 'Mengekspor...' : 'PDF'}
+            <FileText size={18} />
+            PDF
           </button>
           <button 
             onClick={exportWordMain}
@@ -527,10 +494,18 @@ export const BukuBantu: React.FC<BukuBantuProps> = ({ type, references, transact
         title="Cetak Laporan"
       />
 
+      <PdfOrientationModal
+        isOpen={isPdfModalOpen}
+        onClose={() => setIsPdfModalOpen(false)}
+        onSelect={handlePdfOrientationSelect}
+        title="Export Buku Bantu ke PDF"
+        description="Pilih orientasi halaman terlebih dahulu. Setelah itu browser membuka dialog cetak, lalu pilih Save as PDF agar tabel buku bantu tidak terpotong saat berganti halaman."
+      />
+
       {/* Table or Grid */}
       <div id="buku-bantu-container" className="bg-white p-8 print:shadow-none print:p-0">
         {/* Header for Export/Print and Screen */}
-        <div className="flex flex-col sm:flex-row items-center sm:items-start gap-4 sm:gap-6 border-b-4 border-double border-slate-900 pb-6 mb-8 text-center sm:text-left">
+        <div className="print-formal-header flex flex-col sm:flex-row items-center sm:items-start gap-4 sm:gap-6 border-b-4 border-double border-slate-900 pb-6 mb-8 text-center sm:text-left">
           <div className="w-20 h-20 md:w-24 md:h-24 bg-white flex items-center justify-center shrink-0">
             {currentDataUmum.logoUrl ? (
               <img src={currentDataUmum.logoUrl} alt="Logo" className="w-full h-full object-contain" referrerPolicy="no-referrer" />
@@ -550,7 +525,7 @@ export const BukuBantu: React.FC<BukuBantuProps> = ({ type, references, transact
           </div>
         </div>
 
-        <div className="text-center mb-8 hidden print:block">
+        <div className="print-formal-title text-center mb-8 hidden print:block">
           <h1 className="text-xl md:text-2xl font-black text-slate-900 tracking-tighter mb-1 uppercase underline decoration-2 underline-offset-4">{getTitle()}</h1>
         </div>
 

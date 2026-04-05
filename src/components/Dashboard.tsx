@@ -44,6 +44,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { buildFinancialAnalysisPayload } from '../lib/financialAnalysis';
 import { exportElementToPdf } from '../lib/documentExport';
+import { PdfOrientationModal } from './PdfOrientationModal';
 
 const COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
 
@@ -90,6 +91,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 }) => {
   const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isPdfModalOpen, setIsPdfModalOpen] = useState(false);
   const [filterYear, setFilterYear] = useState(new Date().getFullYear().toString());
 
   // Hierarchical filters for Owner
@@ -213,14 +215,19 @@ export const Dashboard: React.FC<DashboardProps> = ({
     ].filter(d => d.value > 0);
   }, [filteredAccounts]);
 
-  const exportAIPDF = async () => {
+  const exportAIPDF = () => {
+    setIsPdfModalOpen(true);
+  };
+
+  const handlePdfOrientationSelect = async (orientation: 'portrait' | 'landscape') => {
+    setIsPdfModalOpen(false);
     const element = document.getElementById('ai-analysis-content');
     if (!element) return;
 
     await exportElementToPdf({
       element,
       filename: 'Wawasan_AI_BUMDesa.pdf',
-      orientation: 'portrait',
+      orientation,
     });
   };
 
@@ -447,6 +454,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
           </motion.div>
         )}
       </AnimatePresence>
+
+      <PdfOrientationModal
+        isOpen={isPdfModalOpen}
+        onClose={() => setIsPdfModalOpen(false)}
+        onSelect={handlePdfOrientationSelect}
+        title="Export Analisis AI ke PDF"
+        description="Pilih orientasi halaman untuk file PDF analisis AI. Setelah dipilih, file akan langsung dibuat dan diunduh."
+      />
 
       {/* Stats Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">

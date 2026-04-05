@@ -28,7 +28,7 @@ const getPrintOverrides = (orientation: PageOrientation) => `
   <style>
     @page {
       size: A4 ${orientation};
-      margin: 10mm;
+      margin: 16mm 12mm 18mm 12mm;
     }
 
     html, body, #root, main, section, article, div {
@@ -42,13 +42,42 @@ const getPrintOverrides = (orientation: PageOrientation) => `
       background: #ffffff !important;
       color: #000000 !important;
       overflow: visible !important;
+      font-family: Arial, Helvetica, sans-serif !important;
+      line-height: 1.45 !important;
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
     }
 
     #print-root {
       padding: 0;
-      margin: 0;
+      margin: 0 auto;
+    }
+
+    #print-root > * {
+      background: #ffffff !important;
+    }
+
+    #report-container,
+    #buku-bantu-container {
+      padding: 2mm 0 6mm 0 !important;
+      min-height: auto !important;
+    }
+
+    .print-formal-header {
+      margin-bottom: 8mm !important;
+      padding-bottom: 5mm !important;
+    }
+
+    .print-formal-title {
+      margin-bottom: 7mm !important;
+    }
+
+    .print-formal-body {
+      margin-bottom: 8mm !important;
+    }
+
+    .print-formal-signature {
+      margin-top: 10mm !important;
     }
 
     .no-print {
@@ -72,6 +101,7 @@ const getPrintOverrides = (orientation: PageOrientation) => `
       width: 100% !important;
       border-collapse: collapse !important;
       page-break-inside: auto;
+      break-inside: auto;
     }
 
     thead {
@@ -83,11 +113,19 @@ const getPrintOverrides = (orientation: PageOrientation) => `
     }
 
     tr,
+    tbody,
+    th,
+    td,
     img,
     svg,
     .break-inside-avoid {
       page-break-inside: avoid !important;
       break-inside: avoid !important;
+    }
+
+    p, li, td, th {
+      orphans: 3;
+      widows: 3;
     }
   </style>
 `;

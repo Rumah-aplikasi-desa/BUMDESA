@@ -18,7 +18,8 @@ import * as XLSX from 'xlsx';
 import { motion } from 'motion/react';
 import { Account, Reference, Transaction } from '../types';
 import { PrintModal } from './PrintModal';
-import { exportElementToPdf, openElementPrintPreview } from '../lib/documentExport';
+import { openElementPrintPreview } from '../lib/documentExport';
+import { PdfOrientationModal } from './PdfOrientationModal';
 
 interface LaporanProps {
   type: string;
@@ -81,8 +82,8 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
     ? references.filter(r => r.userId === bumdesUserId || !r.userId)
     : references;
 
-  const [isExportingPDF, setIsExportingPDF] = useState(false);
   const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
+  const [isPdfModalOpen, setIsPdfModalOpen] = useState(false);
 
   const getAccountBalance = (accountCode: string, year: string, month: string) => {
     const targetYear = parseInt(year);
@@ -220,21 +221,19 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
     XLSX.writeFile(wb, `${getReportTitle()}_${currentDataUmum.namaBumdesa}_${filterMonth}_${filterYear}.xlsx`);
   };
 
-  const handleExportPDF = async () => {
+  const handleExportPDF = () => {
+    setIsPdfModalOpen(true);
+  };
+
+  const handlePdfOrientationSelect = (orientation: 'portrait' | 'landscape') => {
+    setIsPdfModalOpen(false);
     const element = document.getElementById('report-container');
     if (!element) return;
-
-    setIsExportingPDF(true);
-
-    try {
-      await exportElementToPdf({
-        element,
-        filename: `${getReportTitle()}_${currentDataUmum.namaBumdesa}_${filterMonth}_${filterYear}.pdf`,
-        orientation: 'landscape',
-      });
-    } finally {
-      setIsExportingPDF(false);
-    }
+    openElementPrintPreview({
+      element,
+      title: `${getReportTitle()}_${currentDataUmum.namaBumdesa}_${filterMonth}_${filterYear}`,
+      orientation,
+    });
   };
 
   const handleExportDoc = () => {
@@ -1480,15 +1479,10 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
           </button>
           <button 
             onClick={handleExportPDF}
-            disabled={isExportingPDF}
-            className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-bold text-red-600 bg-red-50 rounded-xl hover:bg-red-100 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-bold text-red-600 bg-red-50 rounded-xl hover:bg-red-100 transition-all"
           >
-            {isExportingPDF ? (
-              <div className="w-4 h-4 border-2 border-red-600/30 border-t-red-600 rounded-full animate-spin" />
-            ) : (
-              <FileText size={18} />
-            )}
-            <span className="hidden sm:inline">{isExportingPDF ? 'Mengekspor...' : 'PDF'}</span>
+            <FileText size={18} />
+            <span className="hidden sm:inline">PDF</span>
           </button>
           <button 
             onClick={handleExportDoc}
@@ -1522,10 +1516,18 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
         title="Cetak Laporan"
       />
 
+      <PdfOrientationModal
+        isOpen={isPdfModalOpen}
+        onClose={() => setIsPdfModalOpen(false)}
+        onSelect={handlePdfOrientationSelect}
+        title="Export Laporan ke PDF"
+        description="Pilih potret atau lanskap dulu. Setelah itu browser membuka dialog cetak, lalu pilih Save as PDF agar tabel tetap utuh dan baris tidak terpotong saat pindah halaman."
+      />
+
       {/* Report Preview */}
       <div id="report-container" className="bg-white p-4 md:p-12 min-h-[800px] print:shadow-none print:p-0">
         {/* Header */}
-        <div className="flex flex-col sm:flex-row items-center sm:items-start gap-4 sm:gap-6 border-b-4 border-double border-slate-900 pb-6 mb-8 text-center sm:text-left">
+        <div className="print-formal-header flex flex-col sm:flex-row items-center sm:items-start gap-4 sm:gap-6 border-b-4 border-double border-slate-900 pb-6 mb-8 text-center sm:text-left">
           <div className="w-20 h-20 md:w-24 md:h-24 bg-white flex items-center justify-center shrink-0">
             {currentDataUmum.logoUrl ? (
               <img src={currentDataUmum.logoUrl} alt="Logo" className="w-full h-full object-contain" referrerPolicy="no-referrer" />
@@ -1546,7 +1548,7 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
         </div>
 
         {/* Title */}
-        <div className="text-center mb-8 md:mb-10">
+        <div className="print-formal-title text-center mb-8 md:mb-10">
           <h1 className="text-xl md:text-2xl font-black text-slate-900 tracking-tighter mb-1 uppercase underline decoration-2 underline-offset-4">{getReportTitle()}</h1>
           <p className="text-slate-700 font-bold uppercase tracking-widest text-[10px] md:text-xs">
             {getSubtitle()}
@@ -1554,12 +1556,12 @@ export const Laporan: React.FC<LaporanProps> = ({ type, dataUmum, transactions, 
         </div>
 
         {/* Table Content */}
-        <div className="overflow-x-auto -mx-4 px-4 md:mx-0 md:px-0 mb-12 md:mb-16">
+        <div className="print-formal-body overflow-x-auto -mx-4 px-4 md:mx-0 md:px-0 mb-12 md:mb-16">
           {renderTableContent()}
         </div>
 
         {/* Signature Section */}
-        <div className="flex justify-end mt-8 md:mt-12 break-inside-avoid">
+        <div className="print-formal-signature flex justify-end mt-8 md:mt-12 break-inside-avoid">
           <div className="flex flex-col items-center text-center w-64">
             <p className="text-[10px] font-bold text-slate-700 mb-1 uppercase tracking-widest">
               {currentDataUmum.desa || currentDataUmum.kecamatan || currentDataUmum.kabupaten || '....................'}, {formatDate(new Date())}
